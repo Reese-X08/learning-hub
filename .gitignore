@@ -16,3 +16,6 @@ desktop.ini
 
 # 本机专用配置（含个人路径）
 local.bat
+
+# 个人备忘（含本机路径，不上传）
+GITHUB-*.md

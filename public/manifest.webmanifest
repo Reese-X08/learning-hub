@@ -15,5 +15,18 @@
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "事务中心",
+      "short_name": "事务",
+      "description": "打开月历 / 列表形式的事务中心",
+      "url": "/?view=affairs"
+    },
+    {
+      "name": "任务",
+      "short_name": "任务",
+      "url": "/?view=tasks"
+    }
   ]
 }

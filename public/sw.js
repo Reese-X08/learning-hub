@@ -3,8 +3,16 @@
 // 最小可用的 Service Worker：只为让浏览器允许「安装成应用」，并提供一个离线兜底。
 // 策略是「网络优先，失败才用缓存」，所以正常联网时不会拿到旧版本文件。
 
-const CACHE = 'learning-hub-v1';
-const PRECACHE = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
+const VERSION = '2.5.1';
+const CACHE = `learning-hub-${VERSION}`;
+const PRECACHE = [
+  '/',
+  `/styles.css?v=${VERSION}`,
+  `/app.js?v=${VERSION}`,
+  '/manifest.webmanifest',
+  '/icon-192.png',
+  '/icon-512.png',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

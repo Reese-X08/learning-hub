@@ -519,12 +519,17 @@
   rememberButton.addEventListener('click', async () => {
     rememberButton.disabled = true;
     try {
+      // 页面像作业页时，学习中心会默认把网址存到「任务」上
+      const headline = `${document.title || ''} ${String(document.body?.innerText || '').slice(0, 1500)}`;
+      const looksLikeTask = /(作业|测验|考试|实验|报告|论文|互评|练习)/.test(headline);
+
       const payload = {
         kind: 'remember',
         v: 1,
         url: location.href,
         title: document.title,
         host: location.hostname,
+        looksLikeTask,
       };
 
       const result = await chrome.runtime.sendMessage({ type: 'hub:collect', payload });

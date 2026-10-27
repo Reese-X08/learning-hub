@@ -1,0 +1,64 @@
+{
+  "_说明": "「我的事务管理」localStorage 数据结构标准样例。localStorage key = taskApp2，值为本对象的 JSON 字符串。files[].data 为 Base64 Data URL，示例中已截断。",
+  "categories": [
+    {
+      "id": "hw",
+      "name": "家庭作业",
+      "color": "#3b82f6"
+    },
+    {
+      "id": "sch",
+      "name": "日程安排",
+      "color": "#22c55e"
+    },
+    {
+      "id": "per",
+      "name": "个人事务",
+      "color": "#f59e0b"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "1728547200000",
+      "title": "完成数学作业",
+      "date": "2026-10-27",
+      "cat": "hw",
+      "note": "第三章 1-10 题",
+      "priority": 2,
+      "done": false,
+      "files": [
+        {
+          "name": "作业要求.pdf",
+          "size": 183420,
+          "type": "application/pdf",
+          "data": "data:application/pdf;base64,JVBERi0xLjQK...<此处为完整Base64内容>"
+        },
+        {
+          "name": "参考图.png",
+          "size": 52211,
+          "type": "image/png",
+          "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg...<此处为完整Base64内容>"
+        }
+      ]
+    },
+    {
+      "id": "1728547300000",
+      "title": "社团例会",
+      "date": "2026-10-28",
+      "cat": "sch",
+      "note": "",
+      "priority": 3,
+      "done": true,
+      "files": []
+    },
+    {
+      "id": "1728547400000",
+      "title": "买日用品",
+      "date": "2026-10-29",
+      "cat": "per",
+      "note": "洗发水、牙膏",
+      "priority": 1,
+      "done": false
+    }
+  ]
+}

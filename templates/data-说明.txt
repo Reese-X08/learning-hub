@@ -1,11 +1,12 @@
 这个文件夹是你的私人数据
 ========================
 
-db.json          你的课程和任务（第一次启动时由 db.template.json 生成）
+db.json          你的课程、事务和设置（第一次启动时由 db.template.json 生成）
+files\           事务的附件本体，和 db.json 一起备份才完整
 auth.json        密码（开启密码保护后才会生成）
 db.template.json 空白模板，别删
 
-分享给别人之前，把 db.json 和 auth.json 删掉，
+分享给别人之前，把 db.json、auth.json 和 files 文件夹删掉，
 让对方第一次启动时自己生成。
 
 更新程序时，这个文件夹不会被覆盖 —— 放心解压替换。

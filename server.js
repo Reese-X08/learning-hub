@@ -28,6 +28,10 @@ const APP_VERSION = (() => {
 const COOKIE_NAME = 'xy_session';
 const SESSION_TTL = 14 * 24 * 60 * 60 * 1000;
 const MAX_BODY = 512 * 1024;
+// 事务附件（Base64 后约 1.33 倍）和整包备份需要更大的上限
+const MAX_UPLOAD_BODY = 32 * 1024 * 1024;
+const MAX_IMPORT_BODY = 96 * 1024 * 1024;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -104,13 +108,13 @@ function parseCookies(header) {
   return out;
 }
 
-function readBody(req) {
+function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY) {
+      if (size > limit) {
         reject(new HttpError(413, '提交的内容太大了'));
         req.destroy();
         return;
@@ -129,6 +133,37 @@ function readBody(req) {
   });
 }
 
+function decodeDataUrl(value) {
+  if (typeof value !== 'string') return null;
+  const match = /^data:([^,]*),([\s\S]*)$/.exec(value);
+  if (!match) return null;
+  const meta = match[1];
+  const isBase64 = /;base64$/i.test(meta);
+  const type = meta.replace(/;base64$/i, '').split(';')[0] || '';
+  try {
+    const buffer = isBase64
+      ? Buffer.from(match[2], 'base64')
+      : Buffer.from(decodeURIComponent(match[2]), 'utf8');
+    return { buffer, type };
+  } catch {
+    return null;
+  }
+}
+
+// Content-Disposition 里的 ASCII 兜底文件名
+function asciiFileName(name) {
+  const safe = String(name || '')
+    .replace(/[^\x20-\x7e]/g, '_')
+    .replace(/["\\]/g, '_')
+    .trim();
+  return safe || 'download';
+}
+
+// RFC 5987 的 filename* 编码，去掉 encodeURIComponent 不处理但规范不允许的字符
+function encodedFileName(name) {
+  return encodeURIComponent(name).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 /* ── 服务工厂 ─────────────────────────────────────────────── */
 
 function createHubServer(options = {}) {
@@ -141,6 +176,106 @@ function createHubServer(options = {}) {
 
   const store = createStore(dataDir);
   const authFile = path.join(dataDir, 'auth.json');
+  const filesDir = path.join(dataDir, 'files');
+
+  /* 事务附件：内容存 data/files/<id>，db.json 里只留元信息 */
+
+  function storedFilePath(id) {
+    if (!/^[0-9a-f-]{1,64}$/i.test(String(id || ''))) throw new HttpError(400, '附件编号不合法');
+    return path.join(filesDir, id);
+  }
+
+  async function writeStoredFile({ name, type, buffer }) {
+    await fsp.mkdir(filesDir, { recursive: true });
+    const id = crypto.randomUUID();
+    await fsp.writeFile(path.join(filesDir, id), buffer);
+    return { id, name: String(name).slice(0, 200), size: buffer.length, type: String(type || '').slice(0, 120) };
+  }
+
+  async function dropStoredFile(id) {
+    try {
+      await fsp.rm(storedFilePath(id), { force: true });
+    } catch {
+      /* 文件已经不在了就算了 */
+    }
+  }
+
+  /**
+   * 把备份 / 导入数据里内嵌的 Base64 附件落盘，替换成 {id,name,size,type} 元信息。
+   * 失败时把这次已经写出去的文件清掉，避免留下孤儿文件。
+   */
+  async function materializeFiles(tasks) {
+    if (!Array.isArray(tasks)) return tasks;
+
+    const created = [];
+    try {
+      for (const task of tasks) {
+        if (!task || typeof task !== 'object' || !Array.isArray(task.files)) continue;
+        const out = [];
+        for (const file of task.files.slice(0, 20)) {
+          if (!file || typeof file !== 'object' || typeof file.name !== 'string' || !file.name.trim()) continue;
+
+          if (typeof file.data === 'string' && file.data.startsWith('data:')) {
+            const decoded = decodeDataUrl(file.data);
+            if (!decoded) continue;
+            if (decoded.buffer.length > MAX_FILE_BYTES) {
+              throw new HttpError(413, `附件「${file.name}」超过 20MB`);
+            }
+            const meta = await writeStoredFile({
+              name: file.name.trim(),
+              type: file.type || decoded.type,
+              buffer: decoded.buffer,
+            });
+            created.push(meta.id);
+            out.push(meta);
+          } else if (typeof file.id === 'string' && /^[0-9a-f-]{1,64}$/i.test(file.id)) {
+            out.push({
+              id: file.id,
+              name: file.name.trim().slice(0, 200),
+              size: Number(file.size) || 0,
+              type: String(file.type || '').slice(0, 120),
+            });
+          }
+        }
+        task.files = out;
+      }
+    } catch (error) {
+      await Promise.all(created.map((id) => dropStoredFile(id)));
+      throw error;
+    }
+
+    return tasks;
+  }
+
+  // 导出备份时把附件内容一起塞进去，换电脑也能完整恢复
+  async function embedFileData(db) {
+    for (const task of db.tasks || []) {
+      for (const file of task.files || []) {
+        try {
+          const buffer = await fsp.readFile(storedFilePath(file.id));
+          file.data = `data:${file.type || 'application/octet-stream'};base64,${buffer.toString('base64')}`;
+        } catch {
+          /* 文件丢了就只导出元信息 */
+        }
+      }
+    }
+    return db;
+  }
+
+  // 导入备份后清理不再被引用的旧附件
+  async function pruneStoredFiles(db) {
+    const keep = new Set();
+    for (const task of db.tasks || []) {
+      for (const file of task.files || []) keep.add(file.id);
+    }
+    let names = [];
+    try {
+      names = await fsp.readdir(filesDir);
+    } catch {
+      return;
+    }
+    await Promise.all(names.filter((name) => !keep.has(name)).map((name) => dropStoredFile(name)));
+  }
 
   let auth = null;
   let generatedPassword = null;
@@ -296,7 +431,8 @@ function createHubServer(options = {}) {
     res.writeHead(200, {
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Content-Length': stat.size,
-      'Cache-Control': 'no-cache',
+      // HTML 绝不缓存：避免更新后浏览器还拿着旧页面、新脚本对不上
+      'Cache-Control': ext === '.html' ? 'no-store' : 'no-cache',
     });
     if (req.method === 'HEAD') {
       res.end();
@@ -360,11 +496,16 @@ function createHubServer(options = {}) {
 
     if (route === '/api/data' && method === 'GET') {
       const data = await store.snapshot();
-      return sendJson(res, 200, { settings: data.settings, courses: data.courses });
+      return sendJson(res, 200, {
+        settings: data.settings,
+        courses: data.courses,
+        categories: data.categories,
+        tasks: data.tasks,
+      });
     }
 
     if (route === '/api/export' && method === 'GET') {
-      const data = await store.snapshot();
+      const data = await embedFileData(await store.snapshot());
       const stamp = new Date().toISOString().slice(0, 10);
       return sendJson(res, 200, data, {
         'Content-Disposition': `attachment; filename="learning-hub-${stamp}.json"`,
@@ -372,9 +513,130 @@ function createHubServer(options = {}) {
     }
 
     if (route === '/api/import' && method === 'POST') {
+      const body = await readBody(req, MAX_IMPORT_BODY);
+      if (!body || typeof body !== 'object') throw new HttpError(400, '文件内容不对');
+      await materializeFiles(body.tasks);
+      try {
+        const result = await store.replaceAll(body);
+        await pruneStoredFiles(await store.snapshot());
+        return sendJson(res, 200, { ok: true, count: result.count, tasks: result.tasks });
+      } catch (error) {
+        // 导入失败：把这次刚写出去、还没被引用的附件清掉
+        await pruneStoredFiles(await store.snapshot());
+        throw error;
+      }
+    }
+
+    // 从旧版「我的事务管理」导出的数据（taskApp2）也可以直接导进来
+    if (route === '/api/affairs/import' && method === 'POST') {
+      const body = await readBody(req, MAX_IMPORT_BODY);
+      if (!body || typeof body !== 'object' || !Array.isArray(body.tasks)) {
+        throw new HttpError(400, '文件里没有 tasks 列表');
+      }
+      await materializeFiles(body.tasks);
+      try {
+        const result = await store.importAffairs(body);
+        return sendJson(res, 200, { ok: true, ...result });
+      } catch (error) {
+        await pruneStoredFiles(await store.snapshot());
+        throw error;
+      }
+    }
+
+    /* ── 事务 ── */
+
+    if (route === '/api/tasks' && method === 'POST') {
       const body = await readBody(req);
-      const result = await store.replaceAll(body);
-      return sendJson(res, 200, { ok: true, count: result.count });
+      const task = await store.createTask(body);
+      return sendJson(res, 201, { task });
+    }
+
+    const taskFilesMatch = /^\/api\/tasks\/([\w-]{1,64})\/files$/.exec(route);
+    if (taskFilesMatch && method === 'POST') {
+      const body = await readBody(req, MAX_UPLOAD_BODY);
+      const name = typeof body.name === 'string' ? body.name.trim().slice(0, 200) : '';
+      if (!name) throw new HttpError(400, '缺少文件名');
+      const decoded = decodeDataUrl(body.data);
+      if (!decoded) throw new HttpError(400, '文件内容格式不对');
+      if (!decoded.buffer.length) throw new HttpError(400, '文件是空的');
+      if (decoded.buffer.length > MAX_FILE_BYTES) throw new HttpError(413, '单个附件不能超过 20MB');
+
+      const meta = await writeStoredFile({ name, type: body.type || decoded.type, buffer: decoded.buffer });
+      try {
+        const result = await store.addTaskFile(taskFilesMatch[1], meta);
+        return sendJson(res, 201, { file: result.file, task: result.task });
+      } catch (error) {
+        await dropStoredFile(meta.id);
+        throw error;
+      }
+    }
+
+    const taskFileMatch = /^\/api\/tasks\/([\w-]{1,64})\/files\/([\w-]{1,64})$/.exec(route);
+    if (taskFileMatch && method === 'DELETE') {
+      const { file } = await store.removeTaskFile(taskFileMatch[1], taskFileMatch[2]);
+      await dropStoredFile(file.id);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    const taskMatch = /^\/api\/tasks\/([\w-]{1,64})$/.exec(route);
+    if (taskMatch) {
+      if (method === 'PATCH' || method === 'PUT') {
+        const body = await readBody(req);
+        const task = await store.updateTask(taskMatch[1], body);
+        return sendJson(res, 200, { task });
+      }
+
+      if (method === 'DELETE') {
+        const task = await store.deleteTask(taskMatch[1]);
+        for (const file of task.files || []) await dropStoredFile(file.id);
+        return sendJson(res, 200, { ok: true });
+      }
+    }
+
+    /* ── 分类 ── */
+
+    if (route === '/api/categories' && method === 'POST') {
+      const body = await readBody(req);
+      const category = await store.createCategory(body);
+      return sendJson(res, 201, { category });
+    }
+
+    const categoryMatch = /^\/api\/categories\/([\w-]{1,64})$/.exec(route);
+    if (categoryMatch) {
+      if (method === 'PATCH' || method === 'PUT') {
+        const body = await readBody(req);
+        const category = await store.updateCategory(categoryMatch[1], body);
+        return sendJson(res, 200, { category });
+      }
+      if (method === 'DELETE') {
+        await store.deleteCategory(categoryMatch[1]);
+        return sendJson(res, 200, { ok: true });
+      }
+    }
+
+    /* ── 附件下载 ── */
+
+    const fileMatch = /^\/api\/files\/([\w-]{1,64})$/.exec(route);
+    if (fileMatch && method === 'GET') {
+      const found = await store.findTaskFile(fileMatch[1]);
+      if (!found) throw new HttpError(404, '找不到这个附件');
+      const target = storedFilePath(found.file.id);
+      let stat;
+      try {
+        stat = await fsp.stat(target);
+      } catch {
+        throw new HttpError(404, '附件文件已经丢失了');
+      }
+      const name = found.file.name || '附件';
+      baseHeaders(res);
+      res.writeHead(200, {
+        'Content-Type': found.file.type || 'application/octet-stream',
+        'Content-Length': stat.size,
+        'Content-Disposition': `attachment; filename="${asciiFileName(name)}"; filename*=UTF-8''${encodedFileName(name)}`,
+        'Cache-Control': 'private, max-age=0',
+      });
+      fs.createReadStream(target).pipe(res);
+      return;
     }
 
     if (route === '/api/settings' && method === 'POST') {

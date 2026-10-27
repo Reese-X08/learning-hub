@@ -12,9 +12,15 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f63ff'/%3E%3Cpath d='M8 11.5 16 8l8 3.5-8 3.5-8-3.5Zm0 5 8 3.5 8-3.5M8 21l8 3.5 8-3.5' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=2.5.1" />
   </head>
   <body>
+    <!-- 脚本没加载出来时的兜底提示；app.js 一跑起来就会把它删掉 -->
+    <div id="boot-fallback" class="boot-fallback">
+      <strong>正在加载学习中心…</strong>
+      <span>如果一直停在这里，按 <kbd>Ctrl</kbd> + <kbd>F5</kbd> 强制刷新；还不行就关掉窗口重新双击「启动.bat」。</span>
+    </div>
+
     <!-- ── 登录 ───────────────────────────────────────────── -->
     <main id="login-view" class="login-view" hidden>
       <form id="login-form" class="login-card" novalidate>
@@ -100,12 +106,15 @@
             ⟳
           </button>
           <button id="theme-btn" class="icon-btn" type="button" title="切换主题" aria-label="切换主题">◐</button>
+          <button id="affairs-btn" class="btn ghost" type="button" title="打开事务中心">📅 事务中心</button>
           <div class="menu-wrap">
             <button id="menu-btn" class="icon-btn" type="button" title="更多" aria-label="更多" aria-expanded="false">⋯</button>
             <div id="menu" class="menu" hidden>
               <button type="button" data-action="settings">站点设置</button>
               <button type="button" data-action="export">导出备份</button>
               <button type="button" data-action="import">导入备份</button>
+              <button type="button" data-action="import-affairs">导入旧版事务数据</button>
+              <button type="button" data-action="update">检查更新 / 下载新版</button>
               <hr />
               <button type="button" data-action="logout" class="danger">退出登录</button>
             </div>
@@ -124,6 +133,7 @@
           <div class="view-switch" id="view-switch" role="tablist" aria-label="切换视图">
             <button type="button" class="seg active" data-view="courses" role="tab" aria-selected="true">课程</button>
             <button type="button" class="seg" data-view="tasks" role="tab" aria-selected="false">任务</button>
+            <button type="button" class="seg" data-view="affairs" role="tab" aria-selected="false">事务中心</button>
           </div>
 
           <div id="course-view">
@@ -163,6 +173,40 @@
               <button class="btn primary" type="button" data-action="new-task">＋ 新建任务</button>
             </div>
           </div>
+
+          <div id="affairs-view" hidden>
+            <div class="affairs-bar">
+              <div class="month-nav">
+                <button type="button" class="icon-btn small" id="month-prev" title="上个月" aria-label="上个月">‹</button>
+                <h2 id="month-title" class="month-title">—</h2>
+                <button type="button" class="icon-btn small" id="month-next" title="下个月" aria-label="下个月">›</button>
+                <button type="button" class="btn ghost small" id="month-today">今天</button>
+              </div>
+              <div class="affairs-bar-right">
+                <div class="segmented" id="affair-scope" role="tablist" aria-label="日历里显示什么">
+                  <button type="button" class="seg active" data-scope="all" role="tab" aria-selected="true">全部</button>
+                  <button type="button" class="seg" data-scope="task" role="tab" aria-selected="false">事务</button>
+                  <button type="button" class="seg" data-scope="course" role="tab" aria-selected="false">课程截止</button>
+                </div>
+                <div class="segmented" id="affair-view-switch" role="tablist" aria-label="事务视图">
+                  <button type="button" class="seg active" data-affair-view="calendar" role="tab" aria-selected="true">📅 月历</button>
+                  <button type="button" class="seg" data-affair-view="list" role="tab" aria-selected="false">📋 列表</button>
+                </div>
+                <button type="button" class="btn primary" id="affair-add-btn">＋ 新建事务</button>
+              </div>
+            </div>
+
+            <div id="affairs-stats" class="affairs-stats"></div>
+            <div id="affairs-categories" class="affairs-categories"></div>
+
+            <div id="affairs-calendar" class="affairs-calendar"></div>
+            <div id="affairs-list" class="affairs-list" hidden></div>
+            <div id="affairs-empty" class="empty" hidden>
+              <p class="empty-title">这个月还没有事务</p>
+              <p class="muted">点日历上的任意一格，或者按 <kbd>A</kbd> 新建一条。</p>
+              <button class="btn primary" type="button" id="affair-empty-add">＋ 新建事务</button>
+            </div>
+          </div>
         </section>
 
         <aside class="sidebar">
@@ -184,7 +228,10 @@
                 <strong>用扩展更新了网址或任务后，点右上角 ⟳ 刷新</strong>（切回窗口时也会自动刷新）。
               </li>
               <li>点卡片上的「打开」直接跳到对应平台。</li>
-              <li>快捷键：<kbd>/</kbd> 搜索，<kbd>N</kbd> 新建课程，<kbd>T</kbd> 新建任务。</li>
+              <li>
+                <strong>「事务」</strong>是日历版的待办：点日历格子新建、给每条事务挂附件，也能把课程的截止事项叠在同一张月历上。
+              </li>
+              <li>快捷键：<kbd>/</kbd> 搜索，<kbd>N</kbd> 新建课程，<kbd>T</kbd> 新建任务，<kbd>A</kbd> 新建事务。</li>
             </ul>
           </section>
         </aside>
@@ -193,7 +240,8 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <input id="import-file" type="file" accept="application/json,.json" hidden />
+    <input id="affair-import-file" type="file" accept="application/json,.json" hidden />
 
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/app.js?v=2.5.1"></script>
   </body>
 </html>

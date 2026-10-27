@@ -4,6 +4,19 @@
    学习中心 · 前端
    ───────────────────────────────────────────────────────────── */
 
+// 脚本能跑起来，就先撤掉纯 HTML 的「加载中」兜底
+document.getElementById('boot-fallback')?.remove();
+
+// 任何没接住的错误都尽量显示出来，而不是留一个白屏
+window.addEventListener('error', (event) => {
+  if (event.error) showBootError(event.error);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  if (reason instanceof AuthError || reason?.name === 'AuthError') return;
+  showBootError(reason instanceof Error ? reason : new Error(String(reason)));
+});
+
 const $ = (selector, root = document) => root.querySelector(selector);
 
 const PALETTE = ['#4f63ff', '#12b3a8', '#8b5cf6', '#f59e0b', '#0ea5e9', '#f43f5e', '#22c55e', '#ec4899'];
@@ -14,14 +27,32 @@ const THEMES = [
   { value: 'dark', icon: '☾', label: '深色' },
 ];
 const DAY = 86400000;
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const PRIORITY_LABELS = ['低', '中', '高'];
+const AVAILABLE_VIEWS = ['courses', 'tasks', 'affairs'];
+// 固定的下载 / 更新入口：地址不变，发版只换内容，用户不用再问
+const RELEASES_URL = 'https://github.com/Reese-X08/learning-hub/releases/latest';
+// 没填「更新检查地址」时默认也检查一次，老用户不用做任何设置
+const DEFAULT_UPDATE_URL = 'https://raw.githubusercontent.com/Reese-X08/learning-hub/main/version.json';
 
 const state = {
   settings: { title: '学习中心', subtitle: '', semester: '' },
   courses: [],
+  categories: [],
+  tasks: [],
   filter: { q: '', status: 'all', platform: 'all', sort: 'updated' },
   view: 'courses',
   taskFilter: 'open',
+  affair: {
+    view: 'calendar',
+    scope: 'all',
+    category: 'all',
+    month: new Date(),
+  },
   version: '',
+  needsRestart: false,
+  restartNoticeShown: false,
 };
 
 class AuthError extends Error {
@@ -231,6 +262,7 @@ function render() {
   renderGrid();
   renderTaskView();
   renderDue();
+  renderAffairs();
 
   // 没开密码时，"退出登录"没有意义
   const logoutButton = document.querySelector('[data-action="logout"]');
@@ -239,13 +271,53 @@ function render() {
 
 function renderView() {
   const isTasks = state.view === 'tasks';
-  $('#course-view').hidden = isTasks;
+  const isAffairs = state.view === 'affairs';
+  $('#course-view').hidden = isTasks || isAffairs;
   $('#task-view').hidden = !isTasks;
+  const affairsView = $('#affairs-view');
+  if (affairsView) affairsView.hidden = !isAffairs;
 
   for (const button of document.querySelectorAll('#view-switch .seg')) {
     const active = button.dataset.view === state.view;
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
+  }
+
+  const search = $('#search');
+  if (search) {
+    search.placeholder = isAffairs ? '搜索事务 / 备注' : '搜索课程 / 平台 / 备注';
+  }
+}
+
+// 视图切换统一入口：顺便把 ?view=affairs 写进地址栏，
+// 这样任务栏快捷方式、书签、PWA 快捷方式都能直接落到事务中心。
+function setView(view) {
+  state.view = AVAILABLE_VIEWS.includes(view) ? view : 'courses';
+  renderView();
+  if (state.view === 'tasks') renderTaskView();
+  else if (state.view === 'affairs') {
+    renderAffairs();
+    if (state.needsRestart) showRestartNotice();
+  } else {
+    renderGrid();
+  }
+
+  try {
+    const url = new URL(location.href);
+    if (state.view === 'courses') url.searchParams.delete('view');
+    else url.searchParams.set('view', state.view);
+    history.replaceState(null, '', `${url.pathname}${url.search}`);
+  } catch {
+    /* file:// / 旧浏览器不支持也无所谓 */
+  }
+}
+
+function applyViewFromUrl() {
+  try {
+    const view = new URLSearchParams(location.search).get('view');
+    if (view && AVAILABLE_VIEWS.includes(view)) state.view = view;
+  } catch {
+    /* ignore */
   }
 }
 
@@ -715,6 +787,20 @@ function taskRowEl(course, deadline) {
       'button',
       {
         type: 'button',
+        class: 'icon-btn small task-edit',
+        title: '编辑这条任务',
+        'aria-label': '编辑任务',
+        onclick: (event) => {
+          event.stopPropagation();
+          openTaskEditor(course, deadline);
+        },
+      },
+      '✎',
+    ),
+    el(
+      'button',
+      {
+        type: 'button',
         class: 'icon-btn small danger task-delete',
         title: '删除这条任务',
         'aria-label': '删除任务',
@@ -803,8 +889,8 @@ function showApp() {
 
 async function enterApp() {
   const data = await api('/api/data');
-  state.settings = { ...state.settings, ...(data.settings || {}) };
-  state.courses = data.courses || [];
+  applyData(data);
+  applyViewFromUrl();
   showApp();
   render();
 
@@ -840,7 +926,7 @@ function compareVersion(a, b) {
 }
 
 async function checkUpdate() {
-  const url = state.settings.updateUrl;
+  const url = state.settings.updateUrl || DEFAULT_UPDATE_URL;
   if (!url) return;
 
   try {
@@ -868,12 +954,53 @@ function ctxDownloadUrl(configUrl) {
   }
 }
 
+// 更新入口内置在平台里：地址固定，用户不用再去问「网站是多少」
+function openUpdatePage() {
+  const link = el(
+    'a',
+    { class: 'btn primary', href: RELEASES_URL, target: '_blank', rel: 'noopener noreferrer' },
+    '打开发布页',
+  );
+
+  const form = openModal({
+    title: '获取更新',
+    body: [
+      el('p', {}, `当前版本：${state.version || '—'}`),
+      el(
+        'p',
+        { class: 'muted tiny' },
+        '发布页地址是固定的，每次发版只换里面的文件，不会换网址。以后要更新，从这里进就行，不用再找别人要网站。',
+      ),
+      el(
+        'p',
+        { class: 'muted tiny' },
+        el('a', { href: RELEASES_URL, target: '_blank', rel: 'noopener noreferrer', class: 'update-url' }, RELEASES_URL),
+      ),
+    ],
+    footer: [el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '关闭'), link],
+  });
+
+  form.addEventListener('submit', (event) => event.preventDefault());
+}
+
 let lastRefreshAt = 0;
+
+function applyData(data) {
+  state.settings = { ...state.settings, ...(data.settings || {}) };
+  state.courses = data.courses || [];
+  state.categories = data.categories || [];
+  state.tasks = data.tasks || [];
+  // 页面文件更新了、但后台还是旧进程时，事务接口还不存在
+  state.needsRestart = !Array.isArray(data.categories) || !Array.isArray(data.tasks);
+  // 选中的分类被删掉时回到「全部」
+  if (state.affair.category !== 'all' && !state.categories.some((c) => c.id === state.affair.category)) {
+    state.affair.category = 'all';
+  }
+}
 
 async function refresh() {
   const data = await api('/api/data');
-  state.settings = { ...state.settings, ...(data.settings || {}) };
-  state.courses = data.courses || [];
+  applyData(data);
   lastRefreshAt = Date.now();
   render();
 }
@@ -904,6 +1031,8 @@ function setFilter(patch) {
   Object.assign(state.filter, patch);
   renderFilters();
   renderGrid();
+  // 顶部搜索框在「事务」视图里也用来筛事务
+  if (state.view === 'affairs') renderAffairs();
 }
 
 /* ── 弹窗 ─────────────────────────────────────────────────── */
@@ -1244,8 +1373,7 @@ function hostOf(url) {
 
 /* ── 新建任务（绑定到指定网址）───────────────────────────── */
 
-function openTaskModal(presetCourseId) {
-  if (!state.courses.length) {
+function openTaskModal(presetCourseId) {  if (!state.courses.length) {
     toast('先添加一个课程（网址），任务要绑定到它上面', 'error');
     openEditor(null);
     return;
@@ -1329,6 +1457,71 @@ function openTaskModal(presetCourseId) {
       closeModal();
       await refresh();
       toast(result.added ? '任务已创建' : '这个任务已经存在了');
+    } catch (error) {
+      if (error instanceof AuthError) return;
+      showModalError(error.message);
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
+}
+
+// 编辑已有任务：改名、改截止时间、重新绑定网址
+function openTaskEditor(course, deadline) {
+  const titleInput = el('input', { type: 'text', maxlength: '80', value: deadline.title });
+  const dueInput = el('input', { type: 'datetime-local', value: toLocalInput(deadline.due) });
+  const urlInput = el('input', {
+    type: 'text',
+    maxlength: '600',
+    value: deadline.url || '',
+    placeholder: course.url ? `留空就用 ${hostOf(course.url)}` : 'https://…',
+  });
+
+  const saveButton = el('button', { type: 'submit', class: 'btn primary' }, '保存');
+
+  const form = openModal({
+    title: '编辑任务',
+    body: [
+      el('label', { class: 'field' }, el('span', {}, '任务名 *'), titleInput),
+      el('label', { class: 'field' }, el('span', {}, '截止时间'), dueInput),
+      el(
+        'label',
+        { class: 'field' },
+        el('span', {}, '绑定到哪个网址'),
+        urlInput,
+        el('small', { class: 'field-hint' }, '点这条任务时会打开这个地址；留空就用课程自己的网址。'),
+      ),
+      el('p', { class: 'muted tiny' }, `所属课程：${course.name}`),
+    ],
+    footer: [el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '取消'), saveButton],
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearModalError();
+
+    const title = titleInput.value.trim();
+    if (!title) {
+      showModalError('任务名不能为空');
+      titleInput.focus();
+      return;
+    }
+
+    const updated = { ...deadline, title, url: urlInput.value.trim() };
+    if (dueInput.value) {
+      const date = new Date(dueInput.value);
+      updated.due = Number.isNaN(date.getTime()) ? '' : date.toISOString();
+    } else {
+      updated.due = '';
+    }
+
+    saveButton.disabled = true;
+    try {
+      const deadlines = (course.deadlines || []).map((item) => (item.id === deadline.id ? updated : item));
+      await api(`/api/courses/${course.id}`, { method: 'PATCH', body: JSON.stringify({ deadlines }) });
+      closeModal();
+      await refresh();
+      toast('任务已更新');
     } catch (error) {
       if (error instanceof AuthError) return;
       showModalError(error.message);
@@ -1441,7 +1634,7 @@ function exportData() {
   document.body.append(link);
   link.click();
   link.remove();
-  toast('已开始下载备份');
+  toast('已开始下载备份（含事务与附件）');
 }
 
 async function importFile(file) {
@@ -1455,7 +1648,1160 @@ async function importFile(file) {
   try {
     const result = await api('/api/import', { method: 'POST', body: JSON.stringify(payload) });
     await refresh();
-    toast(`已导入 ${result.count} 门课程`);
+    toast(`已导入 ${result.count} 门课程、${result.tasks || 0} 条事务`);
+  } catch (error) {
+    if (error instanceof AuthError) return;
+    toast(error.message, 'error');
+  }
+}
+
+/* ── 事务：月历 / 列表 / 分类 / 附件 ─────────────────────── */
+
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function dateKeyOf(date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function todayKey() {
+  return dateKeyOf(new Date());
+}
+
+function categoryOf(id) {
+  return state.categories.find((category) => category.id === id) || null;
+}
+
+function getFileIcon(filename) {
+  const ext = String(filename || '').split('.').pop().toLowerCase();
+  const icons = {
+    pdf: '📄',
+    doc: '📝',
+    docx: '📝',
+    txt: '📃',
+    md: '📃',
+    xls: '📊',
+    xlsx: '📊',
+    csv: '📊',
+    ppt: '📽️',
+    pptx: '📽️',
+    jpg: '🖼️',
+    jpeg: '🖼️',
+    png: '🖼️',
+    gif: '🖼️',
+    svg: '🖼️',
+    webp: '🖼️',
+    mp3: '🎵',
+    wav: '🎵',
+    m4a: '🎵',
+    mp4: '🎬',
+    mov: '🎬',
+    avi: '🎬',
+    zip: '📦',
+    rar: '📦',
+    '7z': '📦',
+    js: '💻',
+    html: '💻',
+    css: '💻',
+    py: '💻',
+    json: '💻',
+  };
+  return icons[ext] || '📎';
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error(`读取「${file.name}」失败`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function downloadAffairFile(file) {
+  const link = document.createElement('a');
+  link.href = `/api/files/${encodeURIComponent(file.id)}`;
+  link.download = file.name || '';
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+// 把某一天的事务和课程截止事项整理成「日历 / 列表」共用的数据
+function affairItemsByDate() {
+  const map = new Map();
+  const scope = state.affair.scope;
+  const category = state.affair.category;
+  const needle = state.filter.q.trim().toLowerCase();
+
+  const add = (dateKey, item) => {
+    if (!dateKey) return;
+    const list = map.get(dateKey) || [];
+    list.push(item);
+    map.set(dateKey, list);
+  };
+
+  const matches = (text) => !needle || String(text || '').toLowerCase().includes(needle);
+
+  if (scope !== 'course') {
+    for (const task of state.tasks) {
+      if (category !== 'all' && task.categoryId !== category) continue;
+      const categoryName = categoryOf(task.categoryId)?.name || '未分类';
+      if (!matches(`${task.title} ${task.note} ${categoryName}`)) continue;
+      add(task.date, { kind: 'task', task });
+    }
+  }
+
+  if (scope !== 'task' && (category === 'all' || scope === 'course')) {
+    for (const deadline of allDeadlines()) {
+      if (!matches(`${deadline.title} ${deadline.course.name}`)) continue;
+      if (!deadline.due) continue;
+      add(dateKeyOf(new Date(deadline.due)), { kind: 'course', deadline, course: deadline.course });
+    }
+  }
+
+  for (const list of map.values()) {
+    list.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'task' ? -1 : 1;
+      if (a.kind === 'task') {
+        return (b.task.priority || 2) - (a.task.priority || 2) || a.task.title.localeCompare(b.task.title, 'zh');
+      }
+      return dueValue(a.deadline) - dueValue(b.deadline);
+    });
+  }
+
+  return map;
+}
+
+function renderAffairs() {
+  // 旧页面 + 新脚本的混搭场景：没有事务视图就安静跳过，别让整个应用白屏
+  if (!document.getElementById('affairs-view')) return;
+
+  const month = state.affair.month;
+  $('#month-title').textContent = `${month.getFullYear()}年${month.getMonth() + 1}月`;
+
+  for (const button of document.querySelectorAll('#affair-scope .seg')) {
+    const active = button.dataset.scope === state.affair.scope;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  }
+  for (const button of document.querySelectorAll('#affair-view-switch .seg')) {
+    const active = button.dataset.affairView === state.affair.view;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  }
+
+  renderAffairStats();
+  renderAffairCategories();
+
+  const calendar = $('#affairs-calendar');
+  const list = $('#affairs-list');
+  const empty = $('#affairs-empty');
+  const isCalendar = state.affair.view === 'calendar';
+
+  calendar.hidden = !isCalendar;
+  list.hidden = isCalendar;
+
+  if (isCalendar) {
+    renderAffairCalendar();
+    empty.hidden = true;
+  } else {
+    const count = renderAffairList();
+    empty.hidden = count > 0;
+    if (!count) {
+      const filtered = Boolean(state.filter.q.trim()) || state.affair.category !== 'all';
+      $('.empty-title', empty).textContent = filtered ? '没有符合条件的事务' : '这个月还没有事务';
+      $('.muted', empty).textContent = filtered
+        ? '换个关键词，或者把分类切回「全部」。'
+        : '点日历上的任意一格，或点上面的「＋ 新建事务」。';
+    }
+  }
+}
+
+function renderAffairStats() {
+  const total = state.tasks.length;
+  const done = state.tasks.filter((task) => task.done).length;
+  const pending = total - done;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const radius = 17;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (pct / 100) * circumference;
+
+  const ring = el('div', { class: 'stat affair-ring-stat' });
+  ring.innerHTML = `<svg class="affair-ring" viewBox="0 0 44 44" width="46" height="46" aria-hidden="true"><circle class="affair-ring-bg" cx="22" cy="22" r="${radius}"/><circle class="affair-ring-fill" cx="22" cy="22" r="${radius}" stroke-dasharray="${circumference.toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}"/><text class="affair-ring-text" x="22" y="26" text-anchor="middle">${pct}%</text></svg>`;
+  ring.append(el('div', {}, el('div', { class: 'stat-label' }, '事务完成度')));
+
+  $('#affairs-stats').replaceChildren(
+    statTile(String(total), '条事务'),
+    statTile(String(done), '已完成'),
+    statTile(String(pending), '待办'),
+    ring,
+  );
+}
+
+function renderAffairCategories() {
+  const box = $('#affairs-categories');
+  const chips = [];
+
+  chips.push(
+    el(
+      'button',
+      {
+        type: 'button',
+        class: `platform-chip affair-cat${state.affair.category === 'all' ? ' active' : ''}`,
+        onclick: () => {
+          state.affair.category = 'all';
+          renderAffairs();
+        },
+      },
+      '全部',
+      el('span', { class: 'count' }, String(state.tasks.length)),
+    ),
+  );
+
+  for (const category of state.categories) {
+    const count = state.tasks.filter((task) => task.categoryId === category.id).length;
+    const active = state.affair.category === category.id;
+
+    const chip = el('div', {
+      class: `platform-chip affair-cat${active ? ' active' : ''}`,
+      role: 'button',
+      tabindex: '0',
+      title: '点击筛选',
+    });
+    chip.append(
+      el('span', { class: 'category-dot' }),
+      el('span', { class: 'affair-cat-name' }, category.name),
+      el('span', { class: 'count' }, String(count)),
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'affair-cat-edit',
+          title: '改名 / 换颜色',
+          'aria-label': `编辑分类 ${category.name}`,
+          onclick: (event) => {
+            event.stopPropagation();
+            openCategoryModal(category);
+          },
+        },
+        '✎',
+      ),
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'affair-cat-remove',
+          title: '删除这个分类',
+          'aria-label': `删除分类 ${category.name}`,
+          onclick: (event) => {
+            event.stopPropagation();
+            confirmDeleteCategory(category);
+          },
+        },
+        '×',
+      ),
+    );
+    chip.querySelector('.category-dot').style.background = category.color;
+
+    const activate = () => {
+      if (active) {
+        state.affair.category = 'all';
+      } else {
+        state.affair.category = category.id;
+        if (state.affair.scope === 'course') state.affair.scope = 'all';
+      }
+      renderAffairs();
+    };
+    chip.addEventListener('click', (event) => {
+      if (event.target.closest('.affair-cat-remove, .affair-cat-edit')) return;
+      activate();
+    });
+    chip.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activate();
+      }
+    });
+
+    chips.push(chip);
+  }
+
+  chips.push(
+    el(
+      'button',
+      { type: 'button', class: 'platform-chip add-link', title: '新建分类', onclick: () => openCategoryModal(null) },
+      '＋ 新建分类',
+    ),
+  );
+
+  box.replaceChildren(...chips);
+}
+
+function renderAffairCalendar() {
+  const month = state.affair.month;
+  const year = month.getFullYear();
+  const monthIndex = month.getMonth();
+  const startDay = new Date(year, monthIndex, 1).getDay();
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const prevDays = new Date(year, monthIndex, 0).getDate();
+  const today = todayKey();
+  const itemsByDate = affairItemsByDate();
+  const nodes = WEEKDAYS.map((label) => el('div', { class: 'cal-head' }, label));
+
+  for (let i = 0; i < 42; i += 1) {
+    let day;
+    let dateKey;
+    let other = false;
+
+    if (i < startDay) {
+      day = prevDays - startDay + i + 1;
+      dateKey = dateKeyOf(new Date(year, monthIndex - 1, day));
+      other = true;
+    } else if (i >= startDay + daysInMonth) {
+      day = i - startDay - daysInMonth + 1;
+      dateKey = dateKeyOf(new Date(year, monthIndex + 1, day));
+      other = true;
+    } else {
+      day = i - startDay + 1;
+      dateKey = `${year}-${pad2(monthIndex + 1)}-${pad2(day)}`;
+    }
+
+    const cell = el('div', {
+      class: `cal-cell${dateKey === today ? ' today' : ''}${other ? ' other-month' : ''}`,
+      role: 'button',
+      tabindex: '0',
+      title: '点击新建事务',
+      onclick: (event) => {
+        if (event.target.closest('.cal-item, .cal-more')) return;
+        openAffairEditor(null, dateKey);
+      },
+      onkeydown: (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        if (event.target !== cell) return;
+        event.preventDefault();
+        openAffairEditor(null, dateKey);
+      },
+    });
+    cell.append(el('div', { class: 'cal-date' }, String(day)));
+
+    const items = itemsByDate.get(dateKey) || [];
+    for (const item of items.slice(0, 4)) cell.append(calItemEl(item));
+    if (items.length > 4) {
+      cell.append(
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'cal-more',
+            onclick: (event) => {
+              event.stopPropagation();
+              openDayModal(dateKey);
+            },
+          },
+          `+${items.length - 4} 更多`,
+        ),
+      );
+    }
+
+    nodes.push(cell);
+  }
+
+  $('#affairs-calendar').replaceChildren(...nodes);
+}
+
+function calItemEl(item) {
+  if (item.kind === 'course') {
+    const { deadline, course } = item;
+    const node = el(
+      'button',
+      {
+        type: 'button',
+        class: `cal-item course${deadline.done ? ' done' : ''}`,
+        title: `${deadline.title}\n${course.name}${deadline.due ? ` · ${fmtDue(deadline.due)}` : ''}`,
+        onclick: (event) => {
+          event.stopPropagation();
+          openTaskEditor(course, deadline);
+        },
+      },
+      el('span', { class: 'cal-kind' }, '课'),
+      el('span', { class: 'cal-item-title' }, deadline.title),
+    );
+    node.style.setProperty('--accent', course.color || PALETTE[0]);
+    return node;
+  }
+
+  const { task } = item;
+  const category = categoryOf(task.categoryId);
+  const node = el(
+    'button',
+    {
+      type: 'button',
+      class: `cal-item${task.done ? ' done' : ''}`,
+      title: `${task.title}\n${category ? category.name : '未分类'} · 优先级${PRIORITY_LABELS[(task.priority || 2) - 1]}`,
+      onclick: (event) => {
+        event.stopPropagation();
+        openAffairEditor(task.id);
+      },
+    },
+    task.priority === 3 ? el('span', { class: 'cal-flag', title: '高优先级' }, '!') : null,
+    el('span', { class: 'cal-item-title' }, task.title),
+    task.files && task.files.length ? el('span', { class: 'cal-files' }, `📎${task.files.length}`) : null,
+  );
+  node.style.setProperty('--accent', category ? category.color : 'var(--muted)');
+  return node;
+}
+
+function renderAffairList() {
+  const month = state.affair.month;
+  const prefix = `${month.getFullYear()}-${pad2(month.getMonth() + 1)}`;
+  const map = affairItemsByDate();
+  const dates = [...map.keys()].filter((key) => key.startsWith(prefix)).sort();
+
+  const rows = [];
+  for (const date of dates) {
+    for (const item of map.get(date)) rows.push(affairRowEl(item));
+  }
+
+  $('#affairs-list').replaceChildren(...rows);
+  return rows.length;
+}
+
+function affairRowEl(item) {
+  if (item.kind === 'course') {
+    const { deadline, course } = item;
+    const checkbox = el('input', {
+      type: 'checkbox',
+      checked: Boolean(deadline.done),
+      'aria-label': '标记完成',
+      onchange: (event) => toggleTaskDone(course, deadline, event.target.checked),
+    });
+
+    const row = el(
+      'div',
+      {
+        class: `affair-row${deadline.done ? ' done' : ''}`,
+        title: deadline.url ? `打开 ${deadline.url}` : '',
+      },
+      el('label', { class: 'task-check' }, checkbox),
+      el(
+        'div',
+        { class: 'affair-main' },
+        el('div', { class: 'affair-title' }, deadline.title),
+        el(
+          'div',
+          { class: 'affair-meta' },
+          el('span', { class: 'affair-badge course' }, course.name),
+          el('span', { class: 'muted tiny' }, deadline.due ? fmtDue(deadline.due) : '无日期'),
+          deadline.due ? dueBadge(deadline.due) : null,
+        ),
+      ),
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'icon-btn small',
+          title: '打开绑定网址',
+          'aria-label': '打开绑定网址',
+          onclick: (event) => {
+            event.stopPropagation();
+            openTaskTarget(deadline);
+          },
+        },
+        '↗',
+      ),
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'icon-btn small task-edit',
+          title: '编辑这条课程任务',
+          'aria-label': '编辑任务',
+          onclick: (event) => {
+            event.stopPropagation();
+            openTaskEditor(course, deadline);
+          },
+        },
+        '✎',
+      ),
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'icon-btn small danger task-delete',
+          title: '删除这条课程任务',
+          'aria-label': '删除任务',
+          onclick: (event) => {
+            event.stopPropagation();
+            confirmDeleteTask(course, deadline);
+          },
+        },
+        '✕',
+      ),
+    );
+    row.style.setProperty('--accent', course.color || PALETTE[0]);
+    row.querySelector('.affair-badge').style.setProperty('--accent', course.color || PALETTE[0]);
+    row.addEventListener('click', (event) => {
+      if (event.target.closest('input, button, label')) return;
+      openTaskEditor(course, deadline);
+    });
+    return row;
+  }
+
+  const { task } = item;
+  const category = categoryOf(task.categoryId);
+  const checkbox = el('input', {
+    type: 'checkbox',
+    checked: Boolean(task.done),
+    'aria-label': '标记完成',
+    onchange: async (event) => {
+      const done = event.target.checked;
+      try {
+        await api(`/api/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ done }) });
+        await refresh();
+      } catch (error) {
+        if (error instanceof AuthError) return;
+        toast(error.message, 'error');
+        await refresh();
+      }
+    },
+  });
+
+  const fileChips = (task.files || []).map((file) =>
+    el(
+      'button',
+      {
+        type: 'button',
+        class: 'file-chip',
+        title: `下载 ${file.name}`,
+        onclick: (event) => {
+          event.stopPropagation();
+          downloadAffairFile(file);
+        },
+      },
+      `${getFileIcon(file.name)} ${file.name}`,
+    ),
+  );
+
+  const row = el(
+    'div',
+    { class: `affair-row${task.done ? ' done' : ''}`, 'data-id': task.id },
+    el('label', { class: 'task-check' }, checkbox),
+    el(
+      'div',
+      { class: 'affair-main' },
+      el('div', { class: 'affair-title' }, task.title),
+      el(
+        'div',
+        { class: 'affair-meta' },
+        el('span', { class: 'affair-badge' }, category ? category.name : '未分类'),
+        el(
+          'span',
+          { class: `affair-priority p${task.priority || 2}` },
+          PRIORITY_LABELS[(task.priority || 2) - 1],
+        ),
+        el('span', { class: 'muted tiny' }, task.date),
+        task.note ? el('span', { class: 'affair-note', title: task.note }, task.note) : null,
+        task.files && task.files.length ? el('span', { class: 'muted tiny' }, `📎 ${task.files.length}`) : null,
+      ),
+      fileChips.length ? el('div', { class: 'affair-files' }, ...fileChips) : null,
+    ),
+    el(
+      'button',
+      {
+        type: 'button',
+        class: 'icon-btn small task-edit',
+        title: '编辑这条事务',
+        'aria-label': '编辑事务',
+        onclick: (event) => {
+          event.stopPropagation();
+          openAffairEditor(task.id);
+        },
+      },
+      '✎',
+    ),
+    el(
+      'button',
+      {
+        type: 'button',
+        class: 'icon-btn small danger task-delete',
+        title: '删除这条事务',
+        'aria-label': '删除事务',
+        onclick: (event) => {
+          event.stopPropagation();
+          confirmDeleteAffair(task.id);
+        },
+      },
+      '✕',
+    ),
+  );
+
+  row.querySelector('.affair-badge').style.setProperty('--accent', category ? category.color : 'var(--muted)');
+  row.addEventListener('click', (event) => {
+    if (event.target.closest('input, button, label')) return;
+    openAffairEditor(task.id);
+  });
+
+  return row;
+}
+
+function openDayModal(dateKey) {
+  const items = affairItemsByDate().get(dateKey) || [];
+  const [year, month, day] = dateKey.split('-');
+  const list = el('div', { class: 'day-list' });
+
+  for (const item of items) {
+    if (item.kind === 'task') {
+      list.append(
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'day-row',
+            onclick: () => {
+              closeModal();
+              openAffairEditor(item.task.id);
+            },
+          },
+          el('span', { class: 'day-check' }, item.task.done ? '✓' : '○'),
+          el(
+            'div',
+            { class: 'day-main' },
+            el('div', { class: 'day-title' }, item.task.title),
+            el(
+              'div',
+              { class: 'muted tiny' },
+              `${categoryOf(item.task.categoryId)?.name || '未分类'} · 优先级${PRIORITY_LABELS[(item.task.priority || 2) - 1]}`,
+            ),
+          ),
+        ),
+      );
+    } else {
+      list.append(
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'day-row course',
+            onclick: () => {
+              closeModal();
+              openTaskEditor(item.course, item.deadline);
+            },
+          },
+          el('span', { class: 'day-check' }, item.deadline.done ? '✓' : '课'),
+          el(
+            'div',
+            { class: 'day-main' },
+            el('div', { class: 'day-title' }, item.deadline.title),
+            el('div', { class: 'muted tiny' }, `${item.course.name}${item.deadline.due ? ` · ${fmtDue(item.deadline.due)}` : ''}`),
+          ),
+        ),
+      );
+    }
+  }
+
+  const form = openModal({
+    title: `${year} 年 ${Number(month)} 月 ${Number(day)} 日`,
+    body: [
+      el('p', { class: 'muted tiny' }, `共 ${items.length} 条，按优先级 / 截止时间排列。`),
+      list,
+    ],
+    footer: [
+      el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '关闭'),
+      el('button', { type: 'submit', class: 'btn primary' }, '＋ 在这天新建事务'),
+    ],
+  });
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    closeModal();
+    openAffairEditor(null, dateKey);
+  });
+}
+
+/* ── 事务编辑弹窗 ─────────────────────────────────────────── */
+
+function openAffairEditor(taskId, presetDate) {
+  const task = taskId ? state.tasks.find((item) => item.id === taskId) : null;
+  const defaultCategory = state.categories[0]?.id || '';
+  const draft = task
+    ? JSON.parse(JSON.stringify(task))
+    : {
+        title: '',
+        date: presetDate || todayKey(),
+        categoryId: defaultCategory,
+        note: '',
+        priority: 2,
+        done: false,
+        files: [],
+      };
+
+  let files = (draft.files || []).map((file) => ({ ...file }));
+  let pending = [];
+  let removed = [];
+  let colorPriority = draft.priority || 2;
+
+  const titleInput = el('input', {
+    type: 'text',
+    maxlength: '120',
+    value: draft.title || '',
+    placeholder: '例如：完成数学作业',
+  });
+  const dateInput = el('input', { type: 'date', value: draft.date || todayKey() });
+
+  const categorySelect = el(
+    'select',
+    {},
+    el('option', { value: '' }, '未分类'),
+    ...state.categories.map((category) => el('option', { value: category.id }, category.name)),
+  );
+  categorySelect.value = draft.categoryId || '';
+
+  const priorityInput = el('input', {
+    type: 'range',
+    min: '1',
+    max: '3',
+    step: '1',
+    value: String(draft.priority || 2),
+    oninput: () => updatePriorityLabel(),
+  });
+  const priorityLabel = el('span', { class: 'range-value' }, PRIORITY_LABELS[colorPriority - 1]);
+
+  function updatePriorityLabel() {
+    colorPriority = Number(priorityInput.value);
+    priorityLabel.textContent = PRIORITY_LABELS[colorPriority - 1];
+  }
+
+  const noteInput = el('textarea', { rows: '3', maxlength: '2000', placeholder: '可选：作业要求、要带的东西…' });
+  noteInput.value = draft.note || '';
+
+  const doneInput = el('input', { type: 'checkbox', checked: Boolean(draft.done) });
+
+  const fileListEl = el('div', { class: 'file-list' });
+
+  const dropzone = el(
+    'div',
+    {
+      class: 'drop-zone',
+      role: 'button',
+      tabindex: '0',
+      onclick: () => fileInput.click(),
+      onkeydown: (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          fileInput.click();
+        }
+      },
+      ondragover: (event) => {
+        event.preventDefault();
+        dropzone.classList.add('over');
+      },
+      ondragleave: (event) => {
+        event.preventDefault();
+        dropzone.classList.remove('over');
+      },
+      ondrop: (event) => {
+        event.preventDefault();
+        dropzone.classList.remove('over');
+        handleFiles(event.dataTransfer?.files);
+      },
+    },
+    el('div', { class: 'drop-zone-icon' }, '📎'),
+    el(
+      'div',
+      { class: 'drop-zone-text' },
+      '点击选择，或把文件拖到这里',
+      el('br'),
+      el('span', { class: 'muted tiny' }, '单个文件不超过 20MB，可以一次选多个'),
+    ),
+  );
+
+  const fileInput = el('input', {
+    type: 'file',
+    multiple: true,
+    hidden: true,
+    onchange: (event) => {
+      handleFiles(event.target.files);
+      event.target.value = '';
+    },
+  });
+
+  function renderFiles() {
+    const rows = [];
+    const removedIds = new Set(removed.map((file) => file.id));
+
+    for (const file of files) {
+      if (removedIds.has(file.id)) continue;
+      rows.push(
+        el(
+          'div',
+          { class: 'file-row' },
+          el('span', { class: 'file-icon' }, getFileIcon(file.name)),
+          el('span', { class: 'file-name', title: file.name }, file.name),
+          el('span', { class: 'file-size' }, formatFileSize(file.size)),
+          el(
+            'button',
+            {
+              type: 'button',
+              class: 'icon-btn small',
+              title: '下载',
+              'aria-label': '下载附件',
+              onclick: () => downloadAffairFile(file),
+            },
+            '↓',
+          ),
+          el(
+            'button',
+            {
+              type: 'button',
+              class: 'icon-btn small danger',
+              title: '删除附件',
+              'aria-label': '删除附件',
+              onclick: () => removeExistingFile(file),
+            },
+            '×',
+          ),
+        ),
+      );
+    }
+
+    pending.forEach((file, index) => {
+      rows.push(
+        el(
+          'div',
+          { class: 'file-row pending' },
+          el('span', { class: 'file-icon' }, getFileIcon(file.name)),
+          el('span', { class: 'file-name', title: file.name }, file.name),
+          el('span', { class: 'file-size' }, formatFileSize(file.size)),
+          el('span', { class: 'file-pending tiny' }, '保存后上传'),
+          el(
+            'button',
+            {
+              type: 'button',
+              class: 'icon-btn small danger',
+              title: '移除',
+              'aria-label': '移除附件',
+              onclick: () => {
+                pending.splice(index, 1);
+                renderFiles();
+              },
+            },
+            '×',
+          ),
+        ),
+      );
+    });
+
+    fileListEl.replaceChildren(...rows);
+  }
+
+  // 附件删除也等「保存」时再生效，这样点取消不会误删
+  function removeExistingFile(file) {
+    removed.push(file);
+    renderFiles();
+    toast(`保存后删除「${file.name}」`);
+  }
+
+  function handleFiles(fileList) {
+    if (!fileList) return;
+    for (const file of Array.from(fileList)) {
+      if (file.size > MAX_FILE_BYTES) {
+        toast(`「${file.name}」超过 20MB`, 'error');
+        continue;
+      }
+      pending.push(file);
+    }
+    renderFiles();
+  }
+
+  renderFiles();
+
+  const body = [
+    el('label', { class: 'field' }, el('span', {}, '标题 *'), titleInput),
+    el(
+      'div',
+      { class: 'row-2' },
+      el('label', { class: 'field' }, el('span', {}, '日期 *'), dateInput),
+      el('label', { class: 'field' }, el('span', {}, '分类'), categorySelect),
+    ),
+    el(
+      'div',
+      { class: 'field' },
+      el('span', {}, '优先级'),
+      el('div', { class: 'range-row' }, priorityInput, priorityLabel),
+    ),
+    el('label', { class: 'field' }, el('span', {}, '备注'), noteInput),
+    el('div', { class: 'field' }, el('span', {}, '相关文件'), dropzone, fileInput, fileListEl),
+    el(
+      'label',
+      { class: 'field checkbox-field' },
+      el('span', { class: 'check' }, doneInput, '已完成'),
+      el('small', { class: 'field-hint' }, '勾上后，这条事务在月历和列表里会变灰。'),
+    ),
+  ];
+
+  const saveButton = el('button', { type: 'submit', class: 'btn primary' }, task ? '保存' : '创建事务');
+  const form = openModal({
+    title: task ? '编辑事务' : '新建事务',
+    body,
+    footer: [el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '取消'), saveButton],
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearModalError();
+
+    const title = titleInput.value.trim();
+    if (!title) {
+      showModalError('事务标题不能为空');
+      titleInput.focus();
+      return;
+    }
+    if (!dateInput.value) {
+      showModalError('请选一个日期');
+      dateInput.focus();
+      return;
+    }
+
+    const payload = {
+      title,
+      date: dateInput.value,
+      categoryId: categorySelect.value,
+      note: noteInput.value.trim(),
+      priority: Number(priorityInput.value),
+      done: doneInput.checked,
+    };
+
+    saveButton.disabled = true;
+    saveButton.textContent = '保存中…';
+
+    try {
+      let taskId = task?.id || '';
+      if (task) {
+        await api(`/api/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      } else {
+        const created = await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
+        taskId = created.task.id;
+      }
+
+      let failed = [];
+      for (const file of pending) {
+        try {
+          const data = await readFileAsDataURL(file);
+          await api(`/api/tasks/${taskId}/files`, {
+            method: 'POST',
+            body: JSON.stringify({ name: file.name, type: file.type, data }),
+          });
+        } catch (error) {
+          if (error instanceof AuthError) return;
+          failed.push(`上传「${file.name}」：${error.message}`);
+          break;
+        }
+      }
+      for (const file of removed) {
+        try {
+          await api(`/api/tasks/${taskId}/files/${file.id}`, { method: 'DELETE' });
+        } catch (error) {
+          if (error instanceof AuthError) return;
+          failed.push(`删除「${file.name}」：${error.message}`);
+        }
+      }
+      pending = [];
+      removed = [];
+
+      closeModal();
+      await refresh();
+      if (failed.length) toast(`事务已保存，但附件没处理完：${failed.join('；')}`, 'error');
+      else toast(task ? '已保存' : '事务已创建');
+    } catch (error) {
+      if (error instanceof AuthError) return;
+      showModalError(error.message);
+      saveButton.disabled = false;
+      saveButton.textContent = task ? '保存' : '创建事务';
+    }
+  });
+}
+
+function confirmDeleteAffair(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) return;
+
+  const deleteButton = el('button', { type: 'button', class: 'btn danger' }, '删除');
+  const form = openModal({
+    title: '删除事务',
+    body: [
+      el('p', { class: 'confirm-text' }, `确定删除「${task.title}」吗？`),
+      el(
+        'p',
+        { class: 'muted tiny' },
+        task.files && task.files.length
+          ? `它的 ${task.files.length} 个附件也会一起删掉，无法恢复。`
+          : '删除后无法恢复。',
+      ),
+    ],
+    footer: [el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '取消'), deleteButton],
+  });
+
+  deleteButton.addEventListener('click', async () => {
+    deleteButton.disabled = true;
+    deleteButton.textContent = '删除中…';
+    try {
+      await api(`/api/tasks/${task.id}`, { method: 'DELETE' });
+      closeModal();
+      await refresh();
+      toast('事务已删除');
+    } catch (error) {
+      if (error instanceof AuthError) return;
+      showModalError(error.message);
+      deleteButton.disabled = false;
+      deleteButton.textContent = '删除';
+    }
+  });
+
+  form.addEventListener('submit', (event) => event.preventDefault());
+}
+
+/* ── 分类编辑 ─────────────────────────────────────────────── */
+
+function openCategoryModal(category) {
+  const isNew = !category;
+  const nameInput = el('input', {
+    type: 'text',
+    maxlength: '30',
+    value: category?.name || '',
+    placeholder: '例如：考试、社团',
+  });
+
+  let color = category?.color || PALETTE[state.categories.length % PALETTE.length];
+  const swatches = el('div', { class: 'swatches', role: 'group', 'aria-label': '分类颜色' });
+
+  for (const value of PALETTE) {
+    const swatch = el('button', {
+      type: 'button',
+      class: 'swatch',
+      'aria-label': `选择颜色 ${value}`,
+      'aria-pressed': String(value === color),
+      onclick: (event) => {
+        color = value;
+        for (const node of swatches.querySelectorAll('.swatch')) {
+          node.setAttribute('aria-pressed', String(node === event.currentTarget));
+        }
+      },
+    });
+    swatch.style.setProperty('--swatch', value);
+    swatches.append(swatch);
+  }
+
+  const saveButton = el('button', { type: 'submit', class: 'btn primary' }, isNew ? '新建' : '保存');
+  const form = openModal({
+    title: isNew ? '新建分类' : '编辑分类',
+    body: [
+      el('p', { class: 'muted tiny' }, '分类用来给事务分组，会显示成月历上的颜色。双击分类可以改名。'),
+      el('label', { class: 'field' }, el('span', {}, '分类名 *'), nameInput),
+      el('div', { class: 'field' }, el('span', {}, '颜色'), swatches),
+    ],
+    footer: [el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '取消'), saveButton],
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearModalError();
+
+    const name = nameInput.value.trim();
+    if (!name) {
+      showModalError('分类名不能为空');
+      nameInput.focus();
+      return;
+    }
+
+    saveButton.disabled = true;
+    try {
+      if (isNew) await api('/api/categories', { method: 'POST', body: JSON.stringify({ name, color }) });
+      else await api(`/api/categories/${category.id}`, { method: 'PATCH', body: JSON.stringify({ name, color }) });
+      closeModal();
+      await refresh();
+      toast(isNew ? '分类已创建' : '分类已保存');
+    } catch (error) {
+      if (error instanceof AuthError) return;
+      showModalError(error.message);
+      saveButton.disabled = false;
+    }
+  });
+}
+
+function confirmDeleteCategory(category) {
+  const count = state.tasks.filter((task) => task.categoryId === category.id).length;
+  const deleteButton = el('button', { type: 'button', class: 'btn danger' }, '删除分类');
+  const form = openModal({
+    title: '删除分类',
+    body: [
+      el('p', { class: 'confirm-text' }, `确定删除分类「${category.name}」吗？`),
+      el(
+        'p',
+        { class: 'muted tiny' },
+        count ? `其中 ${count} 条事务会变成「未分类」，事务本身不会删除。` : '这个分类下还没有事务。',
+      ),
+    ],
+    footer: [el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '取消'), deleteButton],
+  });
+
+  deleteButton.addEventListener('click', async () => {
+    deleteButton.disabled = true;
+    try {
+      await api(`/api/categories/${category.id}`, { method: 'DELETE' });
+      if (state.affair.category === category.id) state.affair.category = 'all';
+      closeModal();
+      await refresh();
+      toast('分类已删除');
+    } catch (error) {
+      if (error instanceof AuthError) return;
+      showModalError(error.message);
+      deleteButton.disabled = false;
+    }
+  });
+
+  form.addEventListener('submit', (event) => event.preventDefault());
+}
+
+/* ── 导入旧版事务数据 ─────────────────────────────────────── */
+
+function showRestartNotice() {
+  if (state.restartNoticeShown) return;
+  state.restartNoticeShown = true;
+  openModal({
+    title: '需要重启程序',
+    body: [
+      el('p', {}, '页面文件已经更新，但后台服务还是旧版本，所以「事务」现在还不能保存。'),
+      el('p', { class: 'muted tiny' }, '关掉这个窗口，重新双击「启动.bat」就好了；课程和任务不会丢。'),
+    ],
+    footer: [el('button', { type: 'button', class: 'btn primary', onclick: closeModal }, '知道了')],
+  });
+}
+
+async function importAffairsFile(file) {
+  let payload;
+  try {
+    payload = JSON.parse(await file.text());
+  } catch {
+    toast('文件不是合法的 JSON', 'error');
+    return;
+  }
+
+  try {
+    const result = await api('/api/affairs/import', { method: 'POST', body: JSON.stringify(payload) });
+    await refresh();
+    const parts = [`${result.added} 条事务`];
+    if (result.categories) parts.push(`${result.categories} 个分类`);
+    if (result.skipped) parts.push(`跳过 ${result.skipped} 条重复`);
+    toast(`已导入${parts.join('、')}`);
   } catch (error) {
     if (error instanceof AuthError) return;
     toast(error.message, 'error');
@@ -1475,6 +2821,35 @@ function toast(message, kind = 'ok') {
   toastTimer = setTimeout(() => {
     box.hidden = true;
   }, 2400);
+}
+
+// 页面起不来时给一个能看懂、能自己修的提示，而不是白屏
+function showBootError(error) {
+  if (!document.body || $('#boot-error')) return;
+
+  const detail = error && error.stack ? String(error.stack).split('\n').slice(0, 3).join('\n') : String(error || '未知错误');
+
+  const box = el('div', { class: 'boot-error', id: 'boot-error' });
+  box.append(
+    el('strong', {}, '页面没能正常加载'),
+    el(
+      'p',
+      {},
+      '多半是更新过程序后，浏览器里还留着旧页面或旧脚本。先按 Ctrl+F5 强制刷新；还不行就关掉这个窗口，重新双击「启动.bat」。',
+    ),
+    el('p', { class: 'boot-error-detail' }, detail),
+    el(
+      'button',
+      {
+        type: 'button',
+        class: 'btn primary small',
+        onclick: () => location.reload(),
+      },
+      '重新加载',
+    ),
+  );
+
+  document.body.append(box);
 }
 
 /* ── 主题 ─────────────────────────────────────────────────── */
@@ -1561,12 +2936,49 @@ function bindEvents() {
 
   $('#view-switch').addEventListener('click', (event) => {
     const button = event.target.closest('[data-view]');
-    if (!button) return;
-    state.view = button.dataset.view;
-    renderView();
-    if (state.view === 'tasks') renderTaskView();
-    else renderGrid();
+    if (button) setView(button.dataset.view);
   });
+
+  $('#affairs-btn')?.addEventListener('click', () => setView('affairs'));
+
+  /* 事务视图的控制条（旧页面里没有这些元素，跳过即可） */
+  if ($('#affairs-view')) {
+    $('#month-prev').addEventListener('click', () => {
+      const month = state.affair.month;
+      state.affair.month = new Date(month.getFullYear(), month.getMonth() - 1, 1);
+      renderAffairs();
+    });
+    $('#month-next').addEventListener('click', () => {
+      const month = state.affair.month;
+      state.affair.month = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+      renderAffairs();
+    });
+    $('#month-today').addEventListener('click', () => {
+      state.affair.month = new Date();
+      renderAffairs();
+    });
+    $('#affair-scope').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-scope]');
+      if (!button) return;
+      state.affair.scope = button.dataset.scope;
+      renderAffairs();
+    });
+    $('#affair-view-switch').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-affair-view]');
+      if (!button) return;
+      state.affair.view = button.dataset.affairView;
+      renderAffairs();
+    });
+    const openNewAffair = () => {
+      if (state.needsRestart) {
+        showRestartNotice();
+        return;
+      }
+      openAffairEditor(null, todayKey());
+    };
+    $('#affair-add-btn').addEventListener('click', openNewAffair);
+    $('#affair-empty-add').addEventListener('click', openNewAffair);
+  }
 
   const menu = $('#menu');
   const menuButton = $('#menu-btn');
@@ -1595,6 +3007,8 @@ function bindEvents() {
     if (action === 'settings') openSettings();
     else if (action === 'export') exportData();
     else if (action === 'import') $('#import-file').click();
+    else if (action === 'import-affairs') $('#affair-import-file')?.click();
+    else if (action === 'update') openUpdatePage();
     else if (action === 'logout') {
       try {
         await api('/api/logout', { method: 'POST' });
@@ -1610,6 +3024,15 @@ function bindEvents() {
     event.target.value = '';
   });
 
+  const affairImportInput = $('#affair-import-file');
+  if (affairImportInput) {
+    affairImportInput.addEventListener('change', (event) => {
+      const file = event.target.files?.[0];
+      if (file) importAffairsFile(file);
+      event.target.value = '';
+    });
+  }
+
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && modalEl) {
@@ -1619,6 +3042,7 @@ function bindEvents() {
     const tag = (event.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || event.target.isContentEditable;
     if (typing || modalEl) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
 
     if (event.key === '/') {
       event.preventDefault();
@@ -1629,6 +3053,10 @@ function bindEvents() {
     } else if (event.key.toLowerCase() === 't') {
       event.preventDefault();
       openTaskModal();
+    } else if (event.key.toLowerCase() === 'a') {
+      event.preventDefault();
+      if (state.needsRestart) showRestartNotice();
+      else openAffairEditor(null, todayKey());
     }
   });
 }
@@ -1668,7 +3096,18 @@ function openRememberModal(payload) {
   const host = hostOfUrl(payload.url || '');
   const matched = state.courses.find((course) => course.url && hostOfUrl(course.url) === host);
 
-  const urlInput = el('input', { type: 'text', value: payload.url || '', placeholder: 'https://…' });
+  const urlInput = el('input', { type: 'text', maxlength: '600', value: payload.url || '', placeholder: 'https://…' });
+
+  const kindSelect = el(
+    'select',
+    {},
+    el('option', { value: 'course' }, '这门课的入口网址'),
+    el('option', { value: 'task' }, '某条任务的网址'),
+  );
+
+  // 页面看起来像作业页时，默认选「任务」
+  if (payload.looksLikeTask) kindSelect.value = 'task';
+
   const courseSelect = el(
     'select',
     {},
@@ -1685,11 +3124,47 @@ function openRememberModal(payload) {
   });
   const nameField = el('label', { class: 'field' }, el('span', {}, '新课程名'), nameInput);
 
-  const syncNameField = () => {
-    nameField.hidden = courseSelect.value !== '__new__';
-  };
-  courseSelect.addEventListener('change', syncNameField);
-  syncNameField();
+  const taskSelect = el('select', {});
+  const taskNameInput = el('input', {
+    type: 'text',
+    maxlength: '80',
+    value: cleanPageTitle(payload.title) || '',
+    placeholder: '任务名',
+  });
+  const taskField = el('label', { class: 'field' }, el('span', {}, '存到哪条任务'), taskSelect);
+  const taskNameField = el('label', { class: 'field' }, el('span', {}, '新任务名'), taskNameInput);
+
+  function fillTasks() {
+    const course = state.courses.find((item) => item.id === courseSelect.value);
+    const tasks = course?.deadlines || [];
+    taskSelect.replaceChildren(
+      el('option', { value: '__new_task' }, '＋ 新建任务'),
+      ...tasks.map((task) => el('option', { value: task.id }, task.title)),
+    );
+    taskSelect.value = '__new_task';
+  }
+
+  function syncFields() {
+    const isTask = kindSelect.value === 'task';
+    const isNewCourse = courseSelect.value === '__new__';
+
+    nameField.hidden = !isNewCourse;
+    taskField.hidden = !isTask || isNewCourse;
+    taskNameField.hidden = !isTask || (!isNewCourse && taskSelect.value !== '__new_task');
+  }
+
+  courseSelect.addEventListener('change', () => {
+    fillTasks();
+    syncFields();
+  });
+  taskSelect.addEventListener('change', syncFields);
+  kindSelect.addEventListener('change', () => {
+    fillTasks();
+    syncFields();
+  });
+
+  fillTasks();
+  syncFields();
 
   const saveButton = el('button', { type: 'submit', class: 'btn primary' }, '保存');
 
@@ -1698,14 +3173,25 @@ function openRememberModal(payload) {
     body: [
       el('p', { class: 'muted tiny' }, `来自 ${host || '当前页面'}${payload.title ? ` · ${payload.title.slice(0, 60)}` : ''}`),
       el('label', { class: 'field' }, el('span', {}, '网址'), urlInput),
-      el('label', { class: 'field' }, el('span', {}, '存为'), courseSelect),
+      el(
+        'label',
+        { class: 'field' },
+        el('span', {}, '存为'),
+        kindSelect,
+        el('small', { class: 'field-hint' }, '存成课程入口：点课程卡片时打开。存成任务网址：点这条任务时打开。'),
+      ),
+      el('label', { class: 'field' }, el('span', {}, '哪门课'), courseSelect),
       nameField,
+      taskField,
+      taskNameField,
     ],
     footer: [el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '取消'), saveButton],
   });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    clearModalError();
+
     const url = urlInput.value.trim();
     if (!url) {
       showModalError('网址不能为空');
@@ -1713,27 +3199,61 @@ function openRememberModal(payload) {
       return;
     }
 
+    const isTask = kindSelect.value === 'task';
+    const isNewCourse = courseSelect.value === '__new__';
+
     saveButton.disabled = true;
     try {
-      if (courseSelect.value === '__new__') {
-        const name = nameInput.value.trim();
-        if (!name) {
-          showModalError('课程名不能为空');
-          nameInput.focus();
-          saveButton.disabled = false;
-          return;
+      if (!isTask) {
+        if (isNewCourse) {
+          const name = nameInput.value.trim();
+          if (!name) {
+            showModalError('课程名不能为空');
+            nameInput.focus();
+            saveButton.disabled = false;
+            return;
+          }
+          await api('/api/courses', {
+            method: 'POST',
+            body: JSON.stringify({ name, url, status: '进行中', progress: 0 }),
+          });
+          toast('已新建课程并记住网址');
+        } else {
+          await api(`/api/courses/${courseSelect.value}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ url }),
+          });
+          toast('课程网址已更新');
         }
-        await api('/api/courses', {
-          method: 'POST',
-          body: JSON.stringify({ name, url, status: '进行中', progress: 0 }),
-        });
-        toast('已新建课程并记住网址');
       } else {
-        await api(`/api/courses/${courseSelect.value}`, {
+        let courseId = courseSelect.value;
+        let deadlines = [];
+
+        if (isNewCourse) {
+          const name = nameInput.value.trim() || cleanPageTitle(payload.title) || host;
+          const created = await api('/api/courses', {
+            method: 'POST',
+            body: JSON.stringify({ name, url: '', status: '进行中', progress: 0 }),
+          });
+          courseId = created.course.id;
+        } else {
+          const course = state.courses.find((item) => item.id === courseId);
+          deadlines = [...(course?.deadlines || [])];
+        }
+
+        if (isNewCourse || taskSelect.value === '__new_task') {
+          const title = taskNameInput.value.trim() || cleanPageTitle(payload.title) || '新任务';
+          deadlines.push({ title, due: '', url });
+          toast('已新建任务并绑定这个网址');
+        } else {
+          deadlines = deadlines.map((item) => (item.id === taskSelect.value ? { ...item, url } : item));
+          toast('任务网址已更新');
+        }
+
+        await api(`/api/courses/${courseId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ url }),
+          body: JSON.stringify({ deadlines }),
         });
-        toast('网址已更新');
       }
 
       closeModal();
@@ -1795,6 +3315,18 @@ function openCollectModal(payload) {
     el('label', { class: 'field' }, el('span', {}, '存到哪门课'), courseSelect),
   ];
 
+  const bindCheckbox = payload.url ? el('input', { type: 'checkbox', checked: true }) : null;
+  if (bindCheckbox) {
+    body.push(
+      el(
+        'label',
+        { class: 'field checkbox-field' },
+        el('span', { class: 'check' }, bindCheckbox, '每条任务都绑定到这个页面'),
+        el('small', { class: 'field-hint' }, '以后点任务会直接打开这一页；不想绑可以不勾。'),
+      ),
+    );
+  }
+
   if (rows.length) {
     body.push(el('div', { class: 'field' }, el('span', {}, `识别到 ${rows.length} 条任务`), taskList));
   }
@@ -1828,9 +3360,12 @@ function openCollectModal(payload) {
     try {
       let added = 0;
       if (chosen.length) {
+        const bindUrl = Boolean(bindCheckbox && bindCheckbox.checked && payload.url);
         const result = await api(`/api/courses/${courseId}/deadlines`, {
           method: 'POST',
-          body: JSON.stringify({ deadlines: chosen.map((t) => ({ title: t.title, due: t.due })) }),
+          body: JSON.stringify({
+            deadlines: chosen.map((t) => ({ title: t.title, due: t.due, url: bindUrl ? payload.url : '' })),
+          }),
         });
         added = result.added;
       }
@@ -1861,24 +3396,29 @@ function openCollectModal(payload) {
 /* ── 启动 ─────────────────────────────────────────────────── */
 
 async function boot() {
-  applyTheme(localStorage.getItem('learning-hub-theme') || 'auto');
-  bindEvents();
-  pendingCollect = readCollectPayload();
-
-  // 注册 Service Worker：浏览器才允许「安装成应用」
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
-      /* 装不上也不影响正常使用 */
-    });
-  }
-
   try {
-    const session = await api('/api/session', { skipAuthRedirect: true });
-    if (session.version) state.version = session.version;
-    if (session.authenticated) await enterApp();
-    else showLogin();
-  } catch {
-    showLogin();
+    applyTheme(localStorage.getItem('learning-hub-theme') || 'auto');
+    bindEvents();
+    pendingCollect = readCollectPayload();
+
+    // 注册 Service Worker：浏览器才允许「安装成应用」
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {
+        /* 装不上也不影响正常使用 */
+      });
+    }
+
+    try {
+      const session = await api('/api/session', { skipAuthRedirect: true });
+      if (session.version) state.version = session.version;
+      if (session.authenticated) await enterApp();
+      else showLogin();
+    } catch {
+      showLogin();
+    }
+  } catch (error) {
+    console.error(error);
+    showBootError(error);
   }
 }
 

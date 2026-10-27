@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "settings": {
     "title": "学习中心",
     "subtitle": "把散落在各个平台的课程，收进一个页面",
@@ -8,5 +8,11 @@
     "links": [],
     "updateUrl": ""
   },
-  "courses": []
+  "courses": [],
+  "categories": [
+    { "id": "hw", "name": "家庭作业", "color": "#3b82f6" },
+    { "id": "sch", "name": "日程安排", "color": "#22c55e" },
+    { "id": "per", "name": "个人事务", "color": "#f59e0b" }
+  ],
+  "tasks": []
 }

@@ -1,8 +1,8 @@
 {
   "name": "learning-hub",
-  "version": "2.3.0",
+  "version": "2.5.1",
   "private": true,
-  "description": "把分散在雨课堂、小雅、智慧树、MOOC 等平台上的课程收进一个页面：本地网页应用 + 浏览器扩展",
+  "description": "把分散在雨课堂、小雅、智慧树、MOOC 等平台上的课程收进一个页面：本地网页应用 + 浏览器扩展 + 事务日历",
   "license": "MIT",
   "repository": {
     "type": "git",

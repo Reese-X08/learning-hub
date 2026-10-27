@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>我的事务管理</title>
+<style>
+:root {
+  --bg-gradient: linear-gradient(135deg, #e0f2fe 0%, #f0fdf4 50%, #fef3c7 100%);
+  --sidebar-bg: rgba(255,255,255,0.85);
+  --card-bg: rgba(255,255,255,0.9);
+  --glass-bg: rgba(255,255,255,0.75);
+  --shadow: 0 4px 24px rgba(0,0,0,0.06);
+  --shadow-lg: 0 8px 40px rgba(0,0,0,0.1);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+  --text: #1e293b;
+  --text-light: #64748b;
+  --accent: #3b82f6;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, 'SF Pro Display', 'Segoe UI', sans-serif;
+  background: var(--bg-gradient);
+  color: var(--text);
+  min-height: 100vh;
+}
+/* Header */
+.header {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 14px 28px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.6);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.header h1 { font-size: 20px; font-weight: 700; }
+.header-logo { font-size: 24px; margin-right: 4px; }
+.header-right { flex: 1; display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+.view-btn {
+  padding: 8px 20px;
+  border-radius: 24px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+.view-btn.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 12px rgba(59,130,246,0.3);
+}
+.view-btn:not(.active) {
+  background: rgba(255,255,255,0.6);
+  color: var(--text-light);
+}
+.view-btn:not(.active):hover { background: rgba(255,255,255,0.9); }
+
+/* Layout */
+.container { display: flex; height: calc(100vh - 58px); }
+
+/* Sidebar */
+.sidebar {
+  width: 240px;
+  background: var(--sidebar-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-right: 1px solid rgba(255,255,255,0.5);
+  padding: 20px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.sidebar-section { margin-bottom: 24px; }
+.sidebar-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-light);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+.category-item {
+  padding: 10px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+  margin-bottom: 4px;
+}
+.category-item:hover { background: rgba(255,255,255,0.8); }
+.category-item.active { background: rgba(255,255,255,0.9); box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+.category-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.category-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-light);
+  background: rgba(0,0,0,0.04);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.add-btn {
+  width: 100%;
+  padding: 10px;
+  border: 2px dashed rgba(0,0,0,0.1);
+  border-radius: 12px;
+  background: none;
+  cursor: pointer;
+  color: var(--text-light);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+  margin-top: 8px;
+}
+.add-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,0.04); }
+
+/* Stats */
+.stats-card {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+.stats-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+.stats-row:last-child { margin-bottom: 0; }
+.stats-label { color: var(--text-light); }
+.stats-value { font-weight: 600; }
+
+/* Progress Ring */
+.progress-ring-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 12px;
+}
+.progress-ring { transform: rotate(-90deg); }
+.progress-ring-bg { fill: none; stroke: #e2e8f0; }
+.progress-ring-fill { fill: none; stroke-linecap: round; transition: stroke-dashoffset 0.6s ease; }
+.progress-text { font-size: 22px; font-weight: 700; fill: var(--text); }
+.progress-label { font-size: 12px; color: var(--text-light); margin-top: 4px; }
+
+/* Main */
+.main { flex: 1; padding: 24px; overflow-y: auto; }
+.month-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.month-nav h2 { font-size: 22px; font-weight: 700; }
+.nav-arrow {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: var(--card-bg);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.nav-arrow:hover { background: #fff; box-shadow: var(--shadow-lg); }
+.today-btn {
+  margin-left: auto;
+  padding: 8px 18px;
+  border-radius: 20px;
+  border: none;
+  background: var(--card-bg);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+.today-btn:hover { background: #fff; }
+
+/* Calendar Grid */
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.cal-header {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-light);
+  padding: 8px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.cal-cell {
+  background: var(--card-bg);
+  border-radius: var(--radius-sm);
+  min-height: 110px;
+  padding: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid rgba(255,255,255,0.5);
+}
+.cal-cell:hover { background: rgba(255,255,255,0.95); box-shadow: var(--shadow); transform: translateY(-1px); }
+.cal-cell.today { border: 2px solid var(--accent); background: rgba(59,130,246,0.04); }
+.cal-cell.other-month { opacity: 0.35; }
+.cal-date { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+
+/* Task Cards on Calendar */
+.task-card {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  margin-bottom: 3px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: all 0.15s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.task-card:hover { opacity: 0.85; transform: scale(1.02); }
+.task-card.done { opacity: 0.5; text-decoration: line-through; }
+
+/* Task List */
+.task-list { display: none; }
+.task-list-item {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: var(--shadow);
+  transition: all 0.2s;
+  border: 1px solid rgba(255,255,255,0.5);
+}
+.task-list-item:hover { box-shadow: var(--shadow-lg); }
+.task-check {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid #cbd5e1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.task-check.done { background: var(--accent); border-color: var(--accent); }
+.task-check.done::after { content: '✓'; color: #fff; font-size: 12px; font-weight: 700; }
+.task-list-info { flex: 1; }
+.task-list-title { font-size: 14px; font-weight: 500; }
+.task-list-title.done { text-decoration: line-through; color: var(--text-light); }
+.task-list-meta { font-size: 12px; color: var(--text-light); margin-top: 2px; }
+.task-cat-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-right: 6px;
+}
+.task-delete-btn {
+  background: none; border: none; color: #cbd5e1;
+  cursor: pointer; font-size: 18px;
+  transition: color 0.2s; padding: 4px;
+}
+.task-delete-btn:hover { color: #ef4444; }
+
+/* Modal */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(15,23,42,0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: rgba(255,255,255,0.95);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border-radius: 24px;
+  padding: 28px;
+  width: 400px;
+  box-shadow: var(--shadow-lg);
+  border: 1px solid rgba(255,255,255,0.8);
+}
+.modal h3 { font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+.modal label { display: block; font-size: 12px; font-weight: 600; color: var(--text-light); margin-bottom: 6px; margin-top: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+.modal input, .modal select, .modal textarea {
+  width: 100%; padding: 10px 14px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: var(--radius-xs);
+  font-size: 14px;
+  transition: border-color 0.2s;
+  background: #fff;
+}
+.modal input:focus, .modal select:focus, .modal textarea:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+}
+.modal textarea { height: 70px; resize: vertical; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
+.modal-actions button {
+  padding: 10px 24px;
+  border-radius: 14px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.btn-cancel { background: #f1f5f9; color: var(--text-light); }
+.btn-cancel:hover { background: #e2e8f0; }
+.btn-primary { background: var(--accent); color: #fff; box-shadow: 0 2px 12px rgba(59,130,246,0.3); }
+.btn-primary:hover { background: #2563eb; box-shadow: 0 4px 16px rgba(59,130,246,0.4); }
+
+/* Color Swatches (larger, like UI design) */
+.color-row { display: flex; gap: 10px; margin-top: 6px; }
+.color-swatch {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 3px solid transparent;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+.color-swatch:hover { transform: scale(1.15); }
+.color-swatch.selected { border-color: #1e293b; transform: scale(1.15); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+
+/* Priority Slider */
+.priority-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.priority-slider {
+  flex: 1; -webkit-appearance: none; height: 6px;
+  border-radius: 3px; background: #e2e8f0; outline: none;
+}
+.priority-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 20px; height: 20px;
+  border-radius: 50%; background: var(--accent);
+  box-shadow: 0 2px 8px rgba(59,130,246,0.3);
+  cursor: pointer;
+}
+.priority-label { font-size: 13px; font-weight: 500; color: var(--text-light); min-width: 32px; }
+
+.file-upload-area {
+  border: 2px dashed #e2e8f0;
+  border-radius: var(--radius-xs);
+  padding: 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #fff;
+  margin-top: 6px;
+}
+.file-upload-area:hover { border-color: var(--accent); background: rgba(59,130,246,0.03); }
+.file-upload-area.dragover { border-color: var(--accent); background: rgba(59,130,246,0.06); }
+.file-upload-icon { font-size: 20px; margin-bottom: 4px; }
+.file-upload-text { font-size: 12px; color: var(--text-light); }
+.file-upload-text strong { color: var(--accent); }
+.file-list { margin-top: 8px; }
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.file-icon { font-size: 14px; flex-shrink: 0; }
+.file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-size { color: var(--text-light); font-size: 11px; flex-shrink: 0; }
+.file-remove {
+  background: none; border: none; cursor: pointer;
+  color: #cbd5e1; font-size: 16px; padding: 0 2px;
+  transition: color 0.2s;
+}
+.file-remove:hover { color: #ef4444; }
+.file-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10px; color: var(--text-light);
+  background: rgba(0,0,0,0.04);
+  padding: 1px 6px; border-radius: 8px;
+  margin-left: 4px;
+}
+.file-badge-list {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11px; color: var(--text-light);
+}
+.task-file-chip:hover { background: #e2e8f0 !important; color: var(--text) !important; }
+
+/* Task detail view */
+.detail-files-section { margin-top: 12px; }
+.detail-files-title {
+  font-size: 12px; font-weight: 600; color: var(--text-light);
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+}
+
+/* Empty State */
+.empty-state { text-align: center; padding: 60px 20px; color: var(--text-light); }
+.empty-state-icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state-text { font-size: 15px; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .cal-cell { min-height: 60px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <span class="header-logo">📋</span>
+  <h1>我的事务管理</h1>
+  <div class="header-right">
+    <button class="view-btn active" onclick="setView('calendar')">📅 月历</button>
+    <button class="view-btn" onclick="setView('list')">📋 列表</button>
+  </div>
+</div>
+
+<!-- Layout -->
+<div class="container">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">分类</div>
+      <div id="categoryList"></div>
+      <button class="add-btn" onclick="showAddCategory()">＋ 新建分类</button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">今日进度</div>
+      <div class="stats-card">
+        <div class="stats-row">
+          <span class="stats-label">总任务</span>
+          <span class="stats-value" id="statTotal">0</span>
+        </div>
+        <div class="stats-row">
+          <span class="stats-label">已完成</span>
+          <span class="stats-value" id="statDone">0</span>
+        </div>
+        <div class="stats-row">
+          <span class="stats-label">待办</span>
+          <span class="stats-value" id="statPending">0</span>
+        </div>
+        <div class="progress-ring-container">
+          <svg class="progress-ring" width="80" height="80">
+            <circle class="progress-ring-bg" cx="40" cy="40" r="32" stroke-width="6"/>
+            <circle class="progress-ring-fill" id="progressRing" cx="40" cy="40" r="32" stroke-width="6"
+              stroke="url(#grad)" stroke-dasharray="201" stroke-dashoffset="201"/>
+            <defs>
+              <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style="stop-color:#f59e0b"/>
+                <stop offset="100%" style="stop-color:#ef4444"/>
+              </linearGradient>
+            </defs>
+            <text x="40" y="46" text-anchor="middle" class="progress-text" id="progressText">0%</text>
+          </svg>
+          <div class="progress-label">完成度</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main">
+    <div class="month-nav">
+      <button class="nav-arrow" onclick="changeMonth(-1)">‹</button>
+      <h2 id="monthTitle"></h2>
+      <button class="nav-arrow" onclick="changeMonth(1)">›</button>
+      <button class="today-btn" onclick="goToday()">今天</button>
+    </div>
+    <div id="calendarView" class="calendar-grid"></div>
+    <div id="listView" class="task-list"></div>
+  </div>
+</div>
+
+<!-- Task Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modalTitle">新建任务</h3>
+    <label>标题</label>
+    <input id="taskTitle" placeholder="输入任务名称...">
+    <label>日期</label>
+    <input id="taskDate" type="date">
+    <label>分类</label>
+    <select id="taskCategory"></select>
+    <label>优先级</label>
+    <div class="priority-row">
+      <span class="priority-label" id="priorityLabel">中</span>
+      <input type="range" class="priority-slider" id="taskPriority" min="1" max="3" value="2" oninput="updatePriorityLabel()">
+    </div>
+    <label>备注</label>
+    <textarea id="taskNote" placeholder="可选..."></textarea>
+    <label>相关文件</label>
+    <div class="file-upload-area" id="fileUploadArea"
+         onclick="document.getElementById('fileInput').click()"
+         ondragover="handleDragOver(event)"
+         ondragleave="handleDragLeave(event)"
+         ondrop="handleDrop(event)">
+      <div class="file-upload-icon">📎</div>
+      <div class="file-upload-text">点击或拖拽文件到此处上传<br><strong>支持多文件</strong></div>
+    </div>
+    <input type="file" id="fileInput" multiple style="display:none" onchange="handleFileSelect(event)">
+    <div class="file-list" id="fileList"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">取消</button>
+      <button class="btn-primary" onclick="saveTask()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Category Modal -->
+<div class="modal-overlay" id="catModal">
+  <div class="modal">
+    <h3>新建分类</h3>
+    <label>分类名称</label>
+    <input id="catName" placeholder="例如：考试、社团">
+    <label>选择颜色</label>
+    <div class="color-row" id="colorPicker"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeCatModal()">取消</button>
+      <button class="btn-primary" onclick="saveCategory()">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const COLORS = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#a855f7','#14b8a6','#ec4899','#0ea5e9'];
+const CAT_ICONS = {'家庭作业':'📚','日程安排':'📅','个人事务':'','考试':'📝','社团':''};
+
+let state = JSON.parse(localStorage.getItem('taskApp2') || '{}');
+if (!state.categories) state.categories = [
+  {id:'hw', name:'家庭作业', color:'#3b82f6'},
+  {id:'sch', name:'日程安排', color:'#22c55e'},
+  {id:'per', name:'个人事务', color:'#f59e0b'}
+];
+if (!state.tasks) state.tasks = [];
+let currentDate = new Date();
+let currentView = 'calendar';
+let editingTaskId = null;
+let selectedColor = COLORS[0];
+let tempFiles = []; // 当前编辑中的临时文件列表
+
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 单文件最大 2MB（localStorage 限制）
+
+function save() { localStorage.setItem('taskApp2', JSON.stringify(state)); }
+
+function setView(v) {
+  currentView = v;
+  document.querySelectorAll('.view-btn').forEach((b,i) => {
+    b.classList.toggle('active', (i===0&&v==='calendar')||(i===1&&v==='list'));
+  });
+  document.getElementById('calendarView').style.display = v==='calendar'?'grid':'none';
+  document.getElementById('listView').style.display = v==='list'?'block':'none';
+  render();
+}
+
+function renderCategories() {
+  const el = document.getElementById('categoryList');
+  el.innerHTML = state.categories.map(c => {
+    const count = state.tasks.filter(t=>t.cat===c.id).length;
+    return `<div class="category-item">
+      <span class="category-dot" style="background:${c.color}"></span>
+      ${c.name}
+      <span class="category-count">${count}</span>
+    </div>`;
+  }).join('');
+  updateStats();
+}
+
+function updateStats() {
+  const total = state.tasks.length;
+  const done = state.tasks.filter(t=>t.done).length;
+  const pending = total - done;
+  const pct = total ? Math.round(done/total*100) : 0;
+  document.getElementById('statTotal').textContent = total;
+  document.getElementById('statDone').textContent = done;
+  document.getElementById('statPending').textContent = pending;
+  document.getElementById('progressText').textContent = pct + '%';
+  const circumference = 2 * Math.PI * 32;
+  const offset = circumference - (pct / 100) * circumference;
+  document.getElementById('progressRing').style.strokeDashoffset = offset;
+}
+
+function renderCalendar() {
+  const y = currentDate.getFullYear(), m = currentDate.getMonth();
+  document.getElementById('monthTitle').textContent = `${y}年${m+1}月`;
+  const first = new Date(y, m, 1);
+  const startDay = first.getDay();
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const prevDays = new Date(y, m, 0).getDate();
+  const today = new Date();
+
+  let html = ['日','一','二','三','四','五','六'].map(d=>`<div class="cal-header">${d}</div>`).join('');
+
+  for (let i = 0; i < 42; i++) {
+    let day, dateStr, isOther = false;
+    if (i < startDay) { day = prevDays - startDay + i + 1; dateStr = fmtDate(y,m-1,day); isOther = true; }
+    else if (i >= startDay + daysInMonth) { day = i - startDay - daysInMonth + 1; dateStr = fmtDate(y,m+1,day); isOther = true; }
+    else { day = i - startDay + 1; dateStr = fmtDate(y,m,day); }
+    const isToday = !isOther && day===today.getDate() && m===today.getMonth() && y===today.getFullYear();
+    const tasks = state.tasks.filter(t=>t.date===dateStr);
+    html += `<div class="cal-cell ${isToday?'today':''} ${isOther?'other-month':''}" onclick="onCellClick('${dateStr}')">
+      <div class="cal-date">${day}</div>
+      ${tasks.slice(0,4).map(t=>{
+        const cat = state.categories.find(c=>c.id===t.cat);
+        const bg = cat?cat.color:'#94a3b8';
+        const fileBadge = (t.files && t.files.length) ? `<span class="file-badge">📎${t.files.length}</span>` : '';
+        return `<div class="task-card ${t.done?'done':''}" style="background:${bg}18;color:${bg};border-left:3px solid ${bg}" onclick="event.stopPropagation();editTask('${t.id}')">${t.title}${fileBadge}</div>`;
+      }).join('')}
+      ${tasks.length>4?`<div style="font-size:11px;color:#94a3b8;padding:2px 4px;">+${tasks.length-4} 更多</div>`:''}
+    </div>`;
+  }
+  document.getElementById('calendarView').innerHTML = html;
+}
+
+function renderList() {
+  const y = currentDate.getFullYear(), m = currentDate.getMonth();
+  const ms = `${y}-${String(m+1).padStart(2,'0')}`;
+  const tasks = state.tasks.filter(t=>t.date.startsWith(ms)).sort((a,b)=>a.date.localeCompare(b.date));
+  const el = document.getElementById('listView');
+  if (!tasks.length) { el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">本月暂无任务，点击日历添加吧</div></div>'; return; }
+  el.innerHTML = tasks.map(t=>{
+    const cat = state.categories.find(c=>c.id===t.cat);
+    const filesHtml = (t.files && t.files.length) ? `
+      <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+        ${t.files.map((f,i)=>`
+          <span class="task-file-chip" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#f1f5f9;border-radius:8px;font-size:11px;cursor:pointer;color:var(--text-light);" onclick="event.stopPropagation();downloadFile('${t.id}',${i})" title="点击下载">
+            ${getFileIcon(f.name)} ${f.name}
+          </span>
+        `).join('')}
+      </div>
+    ` : '';
+    return `<div class="task-list-item">
+      <div class="task-check ${t.done?'done':''}" onclick="toggleTask('${t.id}')"></div>
+      <div class="task-list-info">
+        <div class="task-list-title ${t.done?'done':''}">${t.title}</div>
+        <div class="task-list-meta">
+          <span class="task-cat-badge" style="background:${cat?cat.color:'94a3b8'}22;color:${cat?cat.color:'#94a3b8'}">${cat?cat.name:'未分类'}</span>
+          ${t.date} · ${['低','中','高'][t.priority-1||1]}
+          ${t.note?' · '+t.note:''}
+          ${(t.files && t.files.length) ? ` · 📎 ${t.files.length} 个文件` : ''}
+        </div>
+        ${filesHtml}
+      </div>
+      <button class="task-delete-btn" onclick="deleteTask('${t.id}')">×</button>
+    </div>`;
+  }).join('');
+}
+
+function render() { renderCategories(); renderCalendar(); renderList(); }
+function fmtDate(y,m,d) { const dt=new Date(y,m,d); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; }
+function changeMonth(d) { currentDate.setMonth(currentDate.getMonth()+d); render(); }
+function goToday() { currentDate = new Date(); render(); }
+
+function onCellClick(dateStr) { editingTaskId=null; document.getElementById('taskDate').value=dateStr; showModal(); }
+function showModal() {
+  document.getElementById('modal').classList.add('show');
+  document.getElementById('taskCategory').innerHTML = state.categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+  if (!editingTaskId) {
+    document.getElementById('modalTitle').textContent='新建任务';
+    document.getElementById('taskTitle').value='';
+    document.getElementById('taskNote').value='';
+    document.getElementById('taskPriority').value=2;
+    updatePriorityLabel();
+    tempFiles = [];
+    renderFileList();
+  }
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('show');
+  editingTaskId = null;
+  tempFiles = [];
+}
+
+function editTask(id) {
+  const t = state.tasks.find(x=>x.id===id); if(!t) return;
+  editingTaskId = id;
+  document.getElementById('modalTitle').textContent = '编辑任务';
+  document.getElementById('taskTitle').value = t.title;
+  document.getElementById('taskDate').value = t.date;
+  document.getElementById('taskNote').value = t.note||'';
+  document.getElementById('taskPriority').value = t.priority||2;
+  updatePriorityLabel();
+  tempFiles = (t.files || []).map(f => ({...f}));
+  renderFileList();
+  showModal();
+  setTimeout(()=>document.getElementById('taskCategory').value=t.cat, 0);
+}
+
+function updatePriorityLabel() {
+  const v = document.getElementById('taskPriority').value;
+  document.getElementById('priorityLabel').textContent = ['低','中','高'][v-1];
+}
+
+function saveTask() {
+  const title = document.getElementById('taskTitle').value.trim(); if(!title) return;
+  const date = document.getElementById('taskDate').value;
+  const cat = document.getElementById('taskCategory').value;
+  const note = document.getElementById('taskNote').value.trim();
+  const priority = parseInt(document.getElementById('taskPriority').value);
+  const files = tempFiles.map(f => ({...f}));
+  if (editingTaskId) {
+    const t=state.tasks.find(x=>x.id===editingTaskId);
+    Object.assign(t,{title,date,cat,note,priority,files});
+  }
+  else {
+    state.tasks.push({id:Date.now().toString(),title,date,cat,note,priority,done:false,files});
+  }
+  save(); closeModal(); render();
+}
+
+function toggleTask(id) { const t=state.tasks.find(x=>x.id===id); t.done=!t.done; save(); render(); }
+function deleteTask(id) { if(confirm('确认删除？')){state.tasks=state.tasks.filter(x=>x.id!==id);save();render();} }
+
+function showAddCategory() {
+  document.getElementById('catModal').classList.add('show');
+  document.getElementById('catName').value='';
+  renderColorPicker();
+}
+function closeCatModal() { document.getElementById('catModal').classList.remove('show'); }
+function renderColorPicker() {
+  document.getElementById('colorPicker').innerHTML = COLORS.map((c,i)=>
+    `<div class="color-swatch ${i===0?'selected':''}" style="background:${c}" onclick="selectColor(this,'${c}')"></div>`
+  ).join('');
+  selectedColor = COLORS[0];
+}
+function selectColor(el, color) {
+  document.querySelectorAll('.color-swatch').forEach(s=>s.classList.remove('selected'));
+  el.classList.add('selected'); selectedColor=color;
+}
+// ===== 文件相关函数 =====
+function getFileIcon(filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  const icons = {
+    pdf:'📄', doc:'📝', docx:'📝', txt:'📃',
+    xls:'📊', xlsx:'📊', csv:'📊',
+    ppt:'📽️', pptx:'📽️',
+    jpg:'🖼️', jpeg:'🖼️', png:'🖼️', gif:'🖼️', svg:'🖼️', webp:'🖼️',
+    mp3:'🎵', wav:'🎵', m4a:'🎵',
+    mp4:'🎬', mov:'🎬', avi:'🎬',
+    zip:'📦', rar:'📦', '7z':'📦',
+    js:'💻', html:'💻', css:'💻', py:'💻', json:'💻'
+  };
+  return icons[ext] || '📎';
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+function renderFileList() {
+  const el = document.getElementById('fileList');
+  if (!tempFiles.length) { el.innerHTML = ''; return; }
+  el.innerHTML = tempFiles.map((f, i) => `
+    <div class="file-item">
+      <span class="file-icon">${getFileIcon(f.name)}</span>
+      <span class="file-name" title="${f.name}">${f.name}</span>
+      <span class="file-size">${formatFileSize(f.size)}</span>
+      <button class="file-remove" onclick="removeFile(${i})" title="移除">×</button>
+    </div>
+  `).join('');
+}
+
+function addFiles(fileList) {
+  const files = Array.from(fileList);
+  files.forEach(file => {
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`文件「${file.name}」过大（${formatFileSize(file.size)}），最大支持 ${formatFileSize(MAX_FILE_SIZE)}`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      tempFiles.push({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        data: e.target.result // Base64 data URL
+      });
+      renderFileList();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function handleFileSelect(e) {
+  addFiles(e.target.files);
+  e.target.value = ''; // 重置以允许重复选择同一文件
+}
+
+function handleDragOver(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  document.getElementById('fileUploadArea').classList.add('dragover');
+}
+
+function handleDragLeave(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  document.getElementById('fileUploadArea').classList.remove('dragover');
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  document.getElementById('fileUploadArea').classList.remove('dragover');
+  if (e.dataTransfer && e.dataTransfer.files) {
+    addFiles(e.dataTransfer.files);
+  }
+}
+
+function removeFile(index) {
+  tempFiles.splice(index, 1);
+  renderFileList();
+}
+
+function downloadFile(taskId, fileIndex) {
+  const t = state.tasks.find(x => x.id === taskId);
+  if (!t || !t.files || !t.files[fileIndex]) return;
+  const f = t.files[fileIndex];
+  const a = document.createElement('a');
+  a.href = f.data;
+  a.download = f.name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function saveCategory() {
+  const name = document.getElementById('catName').value.trim(); if(!name) return;
+  state.categories.push({id:'c'+Date.now(), name, color:selectedColor});
+  save(); render(); closeCatModal();
+}
+
+render();
+</script>
+</body>
+</html>

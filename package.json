@@ -1,0 +1,19 @@
+{
+  "name": "learning-hub",
+  "version": "2.3.0",
+  "private": true,
+  "description": "把分散在雨课堂、小雅、智慧树、MOOC 等平台上的课程收进一个页面：本地网页应用 + 浏览器扩展",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<你的用户名>/<仓库名>.git"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "set-password": "node server.js set-password",
+    "build": "powershell -ExecutionPolicy Bypass -File tools/build-package.ps1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

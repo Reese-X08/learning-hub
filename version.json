@@ -1,0 +1,5 @@
+{
+  "version": "2.3.0",
+  "notes": "任务可以删除；修正发布时间被当成截止时间",
+  "url": "https://github.com/<你的用户名>/<仓库名>/releases/latest"
+}

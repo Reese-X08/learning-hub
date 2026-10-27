@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#4f63ff" />
+    <title>学习中心</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f63ff'/%3E%3Cpath d='M8 11.5 16 8l8 3.5-8 3.5-8-3.5Zm0 5 8 3.5 8-3.5M8 21l8 3.5 8-3.5' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- ── 登录 ───────────────────────────────────────────── -->
+    <main id="login-view" class="login-view" hidden>
+      <form id="login-form" class="login-card" novalidate>
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="34" height="34">
+            <rect width="32" height="32" rx="8" fill="currentColor" />
+            <path
+              d="M8 11.5 16 8l8 3.5-8 3.5-8-3.5Zm0 5 8 3.5 8-3.5M8 21l8 3.5 8-3.5"
+              stroke="#fff"
+              stroke-width="2"
+              fill="none"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+        <h1>学习中心</h1>
+        <p class="muted">输入访问密码，进入你的课程总览</p>
+
+        <label class="field">
+          <span>访问密码</span>
+          <input
+            id="login-password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="••••••••"
+            required
+          />
+        </label>
+
+        <p id="login-error" class="error" role="alert" hidden></p>
+
+        <button id="login-submit" class="btn primary block" type="submit">进入</button>
+        <p class="hint">密码在首次启动的终端窗口里打印过；忘了可以运行 <code>node server.js set-password 新密码</code></p>
+      </form>
+    </main>
+
+    <!-- ── 主界面 ─────────────────────────────────────────── -->
+    <div id="app-view" class="app" hidden>
+      <div id="update-bar" class="update-bar" hidden>
+        <span id="update-text"></span>
+        <a id="update-link" class="btn primary small" target="_blank" rel="noopener noreferrer">去下载</a>
+        <button id="update-close" class="icon-btn small" type="button" title="以后再说" aria-label="关闭提示">✕</button>
+      </div>
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo small" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="24" height="24">
+              <rect width="32" height="32" rx="8" fill="currentColor" />
+              <path
+                d="M8 11.5 16 8l8 3.5-8 3.5-8-3.5Zm0 5 8 3.5 8-3.5M8 21l8 3.5 8-3.5"
+                stroke="#fff"
+                stroke-width="2"
+                fill="none"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+          <div class="brand-text">
+            <h1 id="site-title">学习中心</h1>
+            <p id="site-subtitle" class="muted tiny">—</p>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <div class="search">
+            <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+              <circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.8" />
+              <path d="m13.5 13.5 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
+            <input id="search" type="search" placeholder="搜索课程 / 平台 / 备注" aria-label="搜索课程" />
+            <kbd>/</kbd>
+          </div>
+          <button
+            id="refresh-btn"
+            class="icon-btn"
+            type="button"
+            title="刷新数据（扩展收集后点这里）"
+            aria-label="刷新数据"
+          >
+            ⟳
+          </button>
+          <button id="theme-btn" class="icon-btn" type="button" title="切换主题" aria-label="切换主题">◐</button>
+          <div class="menu-wrap">
+            <button id="menu-btn" class="icon-btn" type="button" title="更多" aria-label="更多" aria-expanded="false">⋯</button>
+            <div id="menu" class="menu" hidden>
+              <button type="button" data-action="settings">站点设置</button>
+              <button type="button" data-action="export">导出备份</button>
+              <button type="button" data-action="import">导入备份</button>
+              <hr />
+              <button type="button" data-action="logout" class="danger">退出登录</button>
+            </div>
+          </div>
+          <button id="task-btn" class="btn ghost" type="button" title="新建一个任务，并绑定到某个网址">＋ 新建任务</button>
+          <button id="add-btn" class="btn primary" type="button">＋ 添加课程</button>
+        </div>
+      </header>
+
+      <section id="stats" class="stats" aria-label="总体情况"></section>
+
+      <section id="platforms" class="platforms" aria-label="平台入口"></section>
+
+      <div class="layout">
+        <section class="main">
+          <div class="view-switch" id="view-switch" role="tablist" aria-label="切换视图">
+            <button type="button" class="seg active" data-view="courses" role="tab" aria-selected="true">课程</button>
+            <button type="button" class="seg" data-view="tasks" role="tab" aria-selected="false">任务</button>
+          </div>
+
+          <div id="course-view">
+            <div class="filters">
+              <div id="status-filter" class="segmented" role="tablist" aria-label="按状态筛选"></div>
+              <div class="filters-right">
+                <select id="platform-filter" aria-label="按平台筛选"></select>
+                <select id="sort-select" aria-label="排序方式">
+                  <option value="updated">最近更新</option>
+                  <option value="deadline">最近截止</option>
+                  <option value="progress">进度从高到低</option>
+                  <option value="name">按名称</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="course-grid" class="grid"></div>
+
+            <div id="empty-state" class="empty" hidden>
+              <p class="empty-title">这里还没有课程</p>
+              <p class="muted">把第一门课加进来，之后所有入口都在一个页面里。</p>
+              <button class="btn primary" type="button" data-action="add">＋ 添加课程</button>
+            </div>
+          </div>
+
+          <div id="task-view" hidden>
+            <div class="filters">
+              <div id="task-filter" class="segmented" role="tablist" aria-label="按完成状态筛选"></div>
+              <span id="task-summary" class="muted tiny"></span>
+            </div>
+
+            <div id="task-groups" class="task-groups"></div>
+
+            <div id="task-empty" class="empty" hidden>
+              <p class="empty-title">还没有任务</p>
+              <p class="muted">点右上角「＋ 新建任务」，选一个网址绑上去。</p>
+              <button class="btn primary" type="button" data-action="new-task">＋ 新建任务</button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="sidebar">
+          <section class="panel">
+            <header class="panel-head">
+              <h2>即将截止</h2>
+              <span id="due-count" class="muted tiny"></span>
+            </header>
+            <ul id="due-list" class="due-list"></ul>
+            <p id="due-empty" class="muted tiny" hidden>14 天内没有截止事项 🎉</p>
+          </section>
+
+          <section class="panel tips">
+            <h2>怎么用</h2>
+            <ul>
+              <li>「＋ 添加课程」是建一个网址入口，不会自动生成任务。</li>
+              <li>「＋ 新建任务」把任务绑到你选的网址上，点任务就直接打开它。</li>
+              <li id="refresh-tip">
+                <strong>用扩展更新了网址或任务后，点右上角 ⟳ 刷新</strong>（切回窗口时也会自动刷新）。
+              </li>
+              <li>点卡片上的「打开」直接跳到对应平台。</li>
+              <li>快捷键：<kbd>/</kbd> 搜索，<kbd>N</kbd> 新建课程，<kbd>T</kbd> 新建任务。</li>
+            </ul>
+          </section>
+        </aside>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <input id="import-file" type="file" accept="application/json,.json" hidden />
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "settings": {
+    "title": "学习中心",
+    "subtitle": "把散落在各个平台的课程，收进一个页面",
+    "semester": "",
+    "requirePassword": false,
+    "links": [],
+    "updateUrl": ""
+  },
+  "courses": []
+}

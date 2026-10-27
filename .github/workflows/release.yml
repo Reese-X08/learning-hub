@@ -1,0 +1,53 @@
+name: 构建便携包
+
+# 打 tag（例如 v2.3.1）后自动打包并发布到 Releases
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 从 tag 同步版本号
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          if (-not $version) { $version = '0.0.0' }
+          Write-Host "版本: $version"
+
+          $pkg = Get-Content package.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          $pkg.version = $version
+          ($pkg | ConvertTo-Json -Depth 10) | Set-Content package.json -Encoding UTF8
+
+          $info = Get-Content version.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          $info.version = $version
+          $info.url = "${{ github.server_url }}/${{ github.repository }}/releases/latest"
+          ($info | ConvertTo-Json -Depth 10) | Set-Content version.json -Encoding UTF8
+
+      - name: 打包
+        shell: pwsh
+        run: ./tools/build-package.ps1
+
+      - name: 发布到 Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 学习中心-便携版.zip
+          generate_release_notes: true
+
+      # 版本号回写到仓库，供应用内的「更新检查」使用
+      - name: 提交版本号
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json version.json
+          git commit -m "chore: 版本号 ${{ github.ref_name }}" || echo "无需提交"
+          git push origin "HEAD:${GITHUB_REF_NAME%/*}" || echo "跳过推送"

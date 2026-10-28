@@ -3291,27 +3291,54 @@ function openCollectModal(payload) {
 
   const rows = [];
   const taskList = el('div', { class: 'scan-list' });
+  let progressCheckbox = null;
 
   for (const task of payload.tasks || []) {
     const checkbox = el('input', { type: 'checkbox', checked: true });
-    rows.push({ checkbox, task });
-    taskList.append(
+    const rowEl = el(
+      'label',
+      { class: 'scan-row checked' },
+      checkbox,
       el(
-        'label',
-        { class: 'scan-row' },
-        checkbox,
+        'div',
+        { class: 'scan-main' },
+        el('div', { class: 'scan-title' }, task.title),
         el(
           'div',
-          { class: 'scan-main' },
-          el('div', { class: 'scan-title' }, task.title),
-          el('div', { class: 'scan-due muted tiny' }, task.due ? fmtDue(task.due) : '没识别到时间'),
+          { class: `scan-due tiny${task.due ? '' : ' missing'}` },
+          task.due ? `截止 ${fmtDue(task.due)}` : '没识别到截止时间',
         ),
       ),
     );
+
+    checkbox.addEventListener('change', () => {
+      rowEl.classList.toggle('checked', checkbox.checked);
+      updateCount();
+    });
+
+    rows.push({ checkbox, task, node: rowEl });
+    taskList.append(rowEl);
+  }
+
+  const countLabel = el('span', { class: 'scan-count muted tiny' });
+  const selectAllBtn = el('button', { type: 'button', class: 'scan-bulk', onclick: () => setAll(true) }, '全选');
+  const selectNoneBtn = el('button', { type: 'button', class: 'scan-bulk', onclick: () => setAll(false) }, '全不选');
+
+  function setAll(value) {
+    rows.forEach((row) => {
+      row.checkbox.checked = value;
+      row.node.classList.toggle('checked', value);
+    });
+    updateCount();
   }
 
   const body = [
-    el('p', { class: 'muted tiny' }, `来自 ${host || '当前页面'}${payload.title ? ` · ${payload.title.slice(0, 60)}` : ''}`),
+    el(
+      'p',
+      { class: 'collect-origin' },
+      el('span', { class: 'collect-origin-host' }, host || '当前页面'),
+      payload.title ? el('span', { class: 'muted tiny' }, payload.title.slice(0, 60)) : null,
+    ),
     el('label', { class: 'field' }, el('span', {}, '存到哪门课'), courseSelect),
   ];
 
@@ -3328,12 +3355,24 @@ function openCollectModal(payload) {
   }
 
   if (rows.length) {
-    body.push(el('div', { class: 'field' }, el('span', {}, `识别到 ${rows.length} 条任务`), taskList));
+    body.push(
+      el(
+        'div',
+        { class: 'field' },
+        el(
+          'div',
+          { class: 'scan-head' },
+          el('span', { class: 'scan-head-title' }, `识别到 ${rows.length} 条任务`),
+          el('span', { class: 'scan-head-actions' }, countLabel, selectAllBtn, selectNoneBtn),
+        ),
+        taskList,
+      ),
+    );
   }
 
-  let progressCheckbox = null;
   if (payload.progress && Number.isFinite(payload.progress.percent)) {
     progressCheckbox = el('input', { type: 'checkbox', checked: true });
+    progressCheckbox.addEventListener('change', updateCount);
     body.push(
       el(
         'label',
@@ -3345,6 +3384,24 @@ function openCollectModal(payload) {
   }
 
   const saveButton = el('button', { type: 'submit', class: 'btn primary' }, '保存');
+
+  function updateCount() {
+    const total = rows.length;
+    const chosen = rows.filter((row) => row.checkbox.checked).length;
+    const progressOn = Boolean(progressCheckbox && progressCheckbox.checked);
+
+    if (total) {
+      countLabel.textContent = `已选 ${chosen} / ${total}`;
+      selectAllBtn.disabled = chosen === total;
+      selectNoneBtn.disabled = chosen === 0;
+    }
+
+    saveButton.disabled = chosen === 0 && !progressOn;
+    saveButton.textContent = chosen ? `保存 ${chosen} 条任务` : progressOn ? '只保存进度' : '保存';
+  }
+
+  updateCount();
+
   const form = openModal({
     title: '从网页收集',
     body,

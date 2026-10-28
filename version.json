@@ -1,5 +1,5 @@
 {
   "version": "2.5.1",
-  "notes": "内置「事务中心」入口；菜单可直接打开发布页；修复重复函数导致的空白页",
+  "notes": "收集弹窗支持全选/全不选，实时显示已选数量",
   "url": "https://github.com/Reese-X08/learning-hub/releases/latest"
 }

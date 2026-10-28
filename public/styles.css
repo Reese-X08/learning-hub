@@ -622,6 +622,52 @@ code {
   padding-right: 4px;
 }
 
+.scan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.scan-head-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.scan-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scan-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.scan-bulk {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brand);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.scan-bulk:hover {
+  text-decoration: underline;
+}
+
+.scan-bulk[disabled] {
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
+  opacity: 0.5;
+}
+
 .scan-row {
   display: flex;
   align-items: flex-start;
@@ -630,11 +676,16 @@ code {
   border: 1px solid var(--line);
   border-radius: 10px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .scan-row:hover {
   background: var(--surface-2);
+}
+
+.scan-row.checked {
+  border-color: rgba(79, 99, 255, 0.35);
+  background: rgba(79, 99, 255, 0.05);
 }
 
 .scan-row input {
@@ -644,6 +695,7 @@ code {
 
 .scan-main {
   min-width: 0;
+  flex: 1;
 }
 
 .scan-title {
@@ -655,6 +707,27 @@ code {
 
 .scan-due {
   margin-top: 1px;
+}
+
+.scan-due.missing {
+  color: #c98a00;
+}
+
+.collect-origin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  flex-wrap: wrap;
+}
+
+.collect-origin-host {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  font-weight: 600;
 }
 
 /* ── 视图切换 / 任务视图 ───────────────────────────────────── */

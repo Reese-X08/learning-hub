@@ -29,7 +29,8 @@ jobs:
 
           $info = Get-Content version.json -Raw -Encoding UTF8 | ConvertFrom-Json
           $info.version = $version
-          $info.url = "${{ github.server_url }}/${{ github.repository }}/releases/latest"
+          # 直链代码更新包：应用内「下载」按钮直接用这个地址（lib/updates.js 读 version.json 的 url）
+          $info.url = "${{ github.server_url }}/${{ github.repository }}/releases/latest/download/learning-hub-code.zip"
           ($info | ConvertTo-Json -Depth 10) | Set-Content version.json -Encoding UTF8
 
       # 应用内自更新读取的文件清单：只列运行时代码和前端资源，不包含 node/、data/
@@ -68,4 +69,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json version.json update-manifest.json
           git commit -m "chore: 版本号 ${{ github.ref_name }}" || echo "无需提交"
-          git push origin "HEAD:${GITHUB_REF_NAME%/*}" || echo "跳过推送"
+          # tag 触发时 GITHUB_REF_NAME 是 v2.9.0（没有 /），旧写法会推到 tag 名上必然失败
+          git push origin "HEAD:main" || echo "跳过推送（main 已前进时会冲突，忽略即可）"

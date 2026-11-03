@@ -1,0 +1,96 @@
+{
+  "format": 1,
+  "version": "2.9.0",
+  "files": [
+    {
+      "path": "lib/self-update.js",
+      "size": 16692,
+      "sha256": "5dd2f80b51b58ac70ef4ac551301f59e811fad004751db3d056e1a9d99d84dd3"
+    },
+    {
+      "path": "lib/store.js",
+      "size": 28141,
+      "sha256": "5f478930c8edb7c2d096367c2211b7ebb807d2b3fb7857a5351b5b52bf8ad74d"
+    },
+    {
+      "path": "lib/updates.js",
+      "size": 16948,
+      "sha256": "6f3a357407293417c9087f4e3d4077ba0777b0f545f7585794a9a85debcb9209"
+    },
+    {
+      "path": "package.json",
+      "size": 877,
+      "sha256": "56bf16bec2ff4619c7512c988c7a66e8b6815950e1cfd985ac174f9810a8dbe7"
+    },
+    {
+      "path": "public/app.js",
+      "size": 131417,
+      "sha256": "8488f1c15e46abc1bb78144e742f379f417affbd3a952ade3dd7f5dee84c1181"
+    },
+    {
+      "path": "public/code-lab.css",
+      "size": 19620,
+      "sha256": "5470d2782ca71104c7558aaec6a624172d1965e8b41859598dd7292669284e0c"
+    },
+    {
+      "path": "public/code-lab.js",
+      "size": 130200,
+      "sha256": "f23b093c273bdca60d3809a6347a573ae164bbf221f3179d0c2e99512a7289c2"
+    },
+    {
+      "path": "public/icon-192.png",
+      "size": 12156,
+      "sha256": "41cae126ebc6df1a754d18ec1d396893b660f994a4b6735a969cf88e64f4c9db"
+    },
+    {
+      "path": "public/icon-256.png",
+      "size": 13809,
+      "sha256": "c165da1c49fb6dca550d20d2dcc7320bd2af1a98aa8de3ed2ebdbeb53e14ba8d"
+    },
+    {
+      "path": "public/icon-512.png",
+      "size": 6557,
+      "sha256": "c469bc96f72f088e2ce2744622bb1bc6c937a99a3282341e3cb302012b9fa2ba"
+    },
+    {
+      "path": "public/icon.ico",
+      "size": 32053,
+      "sha256": "52661add8371a358a5e4f15913a2114587aea7bd43e17d83c7d4d86a7add00f0"
+    },
+    {
+      "path": "public/icon.png",
+      "size": 6557,
+      "sha256": "c469bc96f72f088e2ce2744622bb1bc6c937a99a3282341e3cb302012b9fa2ba"
+    },
+    {
+      "path": "public/index.html",
+      "size": 13446,
+      "sha256": "b508fee3a05f4bc7f8b39f27c13ae678056bc66b0fb95fffc1bd5c14725cb9fd"
+    },
+    {
+      "path": "public/manifest.webmanifest",
+      "size": 1286,
+      "sha256": "e3bceb8cbcb1e60635cfddc94453c4f311f2b36408947b5146477040903a4076"
+    },
+    {
+      "path": "public/styles.css",
+      "size": 49612,
+      "sha256": "d4fc6552a642a2ce1845b32056beee4dc96cd983838526c1051393799f51eb73"
+    },
+    {
+      "path": "public/sw.js",
+      "size": 2074,
+      "sha256": "e04b95d87b367a85ee48865ad11eaf871380025ea990614748ff3bc56a43da9a"
+    },
+    {
+      "path": "server.js",
+      "size": 40849,
+      "sha256": "f8ddd41b676c7c1a96c8ead185c990ca04e75a98786be847fee826d06c3290f3"
+    },
+    {
+      "path": "version.json",
+      "size": 264,
+      "sha256": "ae7f14381c368cf427acc35579bab1d21d19a8154a2fb666da53c7c90976bf56"
+    }
+  ]
+}

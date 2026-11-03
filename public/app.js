@@ -30,11 +30,14 @@ const DAY = 86400000;
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const PRIORITY_LABELS = ['低', '中', '高'];
-const AVAILABLE_VIEWS = ['courses', 'tasks', 'affairs'];
+const AVAILABLE_VIEWS = ['courses', 'tasks', 'affairs', 'code'];
 // 固定的下载 / 更新入口：地址不变，发版只换内容，用户不用再问
 const RELEASES_URL = 'https://github.com/Reese-X08/learning-hub/releases/latest';
-// 没填「更新检查地址」时默认也检查一次，老用户不用做任何设置
-const DEFAULT_UPDATE_URL = 'https://raw.githubusercontent.com/Reese-X08/learning-hub/main/version.json';
+// 推送相关的本地偏好
+const UPDATE_SEEN_KEY = 'learning-hub-update-seen';
+const UPDATE_SKIP_KEY = 'learning-hub-skip-update';
+const UPDATE_NOTIFY_KEY = 'learning-hub-desktop-notify';
+const UPDATE_FALLBACK_INTERVAL = 5 * 60 * 1000;
 
 const state = {
   settings: { title: '学习中心', subtitle: '', semester: '' },
@@ -53,6 +56,25 @@ const state = {
   version: '',
   needsRestart: false,
   restartNoticeShown: false,
+  update: {
+    currentVersion: '',
+    latestVersion: '',
+    hasUpdate: false,
+    notes: '',
+    downloadUrl: '',
+    publishedAt: '',
+    source: '',
+    checkedAt: '',
+    attemptedAt: '',
+    checking: false,
+    error: '',
+    intervalMinutes: 30,
+    providers: [],
+    manifestUrl: '',
+    canSelfUpdate: false,
+    selfUpdateEnabled: false,
+    lastApplyError: null,
+  },
 };
 
 class AuthError extends Error {
@@ -64,6 +86,60 @@ class AuthError extends Error {
 
 // 书签小工具带过来的数据，等界面就绪后再弹窗
 let pendingCollect = null;
+
+// 代码学习台：按需加载，避免每次打开学习中心都解析大段前端代码。
+// 它挂在自己的 Shadow DOM 里，样式和 id 都不会和课程/事务界面互相污染。
+let codeLabPromise = null;
+let codeLabConfigPromise = null;
+
+function loadCodeLabConfig() {
+  if (codeLabConfigPromise) return codeLabConfigPromise;
+  codeLabConfigPromise = new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = '/code-lab-config.js';
+    script.onload = () => resolve();
+    script.onerror = () => resolve();
+    document.head.appendChild(script);
+    // 配置文件是可选的；服务端异常时也不要卡住工作台
+    setTimeout(resolve, 1500);
+  });
+  return codeLabConfigPromise;
+}
+
+function ensureCodeLab() {
+  const host = $('#code-lab-host');
+  if (!host) return Promise.resolve(null);
+  if (codeLabPromise) return codeLabPromise;
+
+  codeLabPromise = (async () => {
+    try {
+      await loadCodeLabConfig();
+      if (typeof window.mountCodeLab !== 'function') {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = '/code-lab.js';
+          script.onload = resolve;
+          script.onerror = () => reject(new Error('代码学习台脚本加载失败'));
+          document.head.appendChild(script);
+        });
+      }
+      const api = window.mountCodeLab(host);
+      host.querySelector('.code-lab-loading')?.remove();
+      return api;
+    } catch (error) {
+      codeLabPromise = null;
+      host.textContent = '';
+      const box = document.createElement('div');
+      box.className = 'code-lab-error';
+      box.textContent = `代码学习台加载失败：${error.message || error}。请刷新页面重试。`;
+      host.appendChild(box);
+      console.error(error);
+      return null;
+    }
+  })();
+
+  return codeLabPromise;
+}
 
 /* ── DOM 小工具 ───────────────────────────────────────────── */
 
@@ -263,6 +339,7 @@ function render() {
   renderTaskView();
   renderDue();
   renderAffairs();
+  renderUpdateUi();
 
   // 没开密码时，"退出登录"没有意义
   const logoutButton = document.querySelector('[data-action="logout"]');
@@ -272,10 +349,21 @@ function render() {
 function renderView() {
   const isTasks = state.view === 'tasks';
   const isAffairs = state.view === 'affairs';
-  $('#course-view').hidden = isTasks || isAffairs;
+  const isCode = state.view === 'code';
+  $('#course-view').hidden = isTasks || isAffairs || isCode;
   $('#task-view').hidden = !isTasks;
   const affairsView = $('#affairs-view');
   if (affairsView) affairsView.hidden = !isAffairs;
+  const codeView = $('#code-view');
+  if (codeView) codeView.hidden = !isCode;
+
+  // 代码学习是整块工作区：收起统计、平台入口和课程侧栏，把宽度让给它
+  $('#app-view').classList.toggle('code-mode', isCode);
+  const codeButton = $('#code-btn');
+  if (codeButton) {
+    codeButton.classList.toggle('active', isCode);
+    codeButton.setAttribute('aria-pressed', String(isCode));
+  }
 
   for (const button of document.querySelectorAll('#view-switch .seg')) {
     const active = button.dataset.view === state.view;
@@ -287,6 +375,8 @@ function renderView() {
   if (search) {
     search.placeholder = isAffairs ? '搜索事务 / 备注' : '搜索课程 / 平台 / 备注';
   }
+
+  if (isCode) ensureCodeLab();
 }
 
 // 视图切换统一入口：顺便把 ?view=affairs 写进地址栏，
@@ -298,6 +388,8 @@ function setView(view) {
   else if (state.view === 'affairs') {
     renderAffairs();
     if (state.needsRestart) showRestartNotice();
+  } else if (state.view === 'code') {
+    ensureCodeLab();
   } else {
     renderGrid();
   }
@@ -852,7 +944,8 @@ function confirmDeleteTask(course, deadline) {
   });
 }
 
-async function toggleTaskDone(course, deadline, done) {  const deadlines = (course.deadlines || []).map((item) => (item.id === deadline.id ? { ...item, done } : item));
+async function toggleTaskDone(course, deadline, done) {
+  const deadlines = (course.deadlines || []).map((item) => (item.id === deadline.id ? { ...item, done } : item));
   try {
     await api(`/api/courses/${course.id}`, { method: 'PATCH', body: JSON.stringify({ deadlines }) });
     await refresh();
@@ -875,6 +968,7 @@ function focusCourse(id) {
 
 function showLogin() {
   closeModal();
+  disconnectUpdateChannel();
   $('#app-view').hidden = true;
   $('#login-view').hidden = false;
   $('#login-password').value = '';
@@ -902,85 +996,521 @@ async function enterApp() {
     openCollectModal(payload);
   }
 
-  checkUpdate();
+  connectUpdateChannel();
 }
 
-/* ── 新版本检查 ───────────────────────────────────────────── */
+/* ── 新版本推送 ───────────────────────────────────────────── */
 
-function compareVersion(a, b) {
-  const parse = (value) =>
-    String(value || '')
-      .split(/[.\-+]/)
-      .map((part) => Number.parseInt(part, 10))
-      .filter((n) => Number.isFinite(n));
-  const left = parse(a);
-  const right = parse(b);
-  const length = Math.max(left.length, right.length);
-  for (let i = 0; i < length; i += 1) {
-    const x = left[i] || 0;
-    const y = right[i] || 0;
-    if (x > y) return 1;
-    if (x < y) return -1;
+let updateStream = null;
+let updatePollTimer = 0;
+let updateDialogRefresh = null;
+// 自动更新任务：{ phase, message, done, total, error }
+let updateJob = null;
+
+function connectUpdateChannel() {
+  if ($('#app-view').hidden) return;
+
+  disconnectUpdateChannel();
+  fetchUpdateState().catch(() => {});
+
+  // 服务端用 SSE 把检查结果实时推过来；不支持时靠下面的轮询兜底
+  if ('EventSource' in window) {
+    try {
+      const stream = new EventSource('/api/events');
+      updateStream = stream;
+      stream.addEventListener('update', (event) => {
+        try {
+          applyUpdateSnapshot(JSON.parse(event.data));
+        } catch {
+          /* 坏消息跳过，不影响页面 */
+        }
+      });
+      stream.addEventListener('update-progress', (event) => {
+        if (!updateJob) return;
+        try {
+          const progress = JSON.parse(event.data);
+          if (progress.message) updateJob.message = progress.message;
+          if (Number.isFinite(progress.done)) updateJob.done = progress.done;
+          if (Number.isFinite(progress.total)) updateJob.total = progress.total;
+          renderUpdateUi();
+        } catch {
+          /* 进度消息坏了就忽略 */
+        }
+      });
+    } catch {
+      /* 落到轮询 */
+    }
   }
-  return 0;
+
+  updatePollTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') fetchUpdateState().catch(() => {});
+  }, UPDATE_FALLBACK_INTERVAL);
 }
 
-async function checkUpdate() {
-  const url = state.settings.updateUrl || DEFAULT_UPDATE_URL;
-  if (!url) return;
+function disconnectUpdateChannel() {
+  if (updateStream) {
+    updateStream.close();
+    updateStream = null;
+  }
+  if (updatePollTimer) {
+    clearInterval(updatePollTimer);
+    updatePollTimer = 0;
+  }
+}
+
+async function fetchUpdateState() {
+  if ($('#app-view').hidden) return;
+  const snapshot = await api('/api/update');
+  applyUpdateSnapshot(snapshot);
+}
+
+async function requestUpdateCheck({ silent = false } = {}) {
+  if (state.update.checking || updateJob) return state.update;
+
+  state.update = { ...state.update, checking: true, error: '' };
+  renderUpdateUi();
 
   try {
-    const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) return;
-    const info = await response.json();
-    const latest = String(info.version || '').trim();
-    if (!latest || compareVersion(latest, state.version || '0.0.0') <= 0) return;
-    if (sessionStorage.getItem('learning-hub-skip-update') === latest) return;
-
-    $('#update-text').textContent = `有新版本 ${latest}${info.notes ? `：${String(info.notes).slice(0, 80)}` : ''}`;
-    const link = $('#update-link');
-    link.href = String(info.url || ctxDownloadUrl(url));
-    $('#update-bar').hidden = false;
-  } catch {
-    /* 没网或地址不对就不提示 */
+    const snapshot = await api('/api/update/check', { method: 'POST' });
+    applyUpdateSnapshot(snapshot);
+    if (!silent) {
+      toast(snapshot.hasUpdate ? `发现新版本 ${snapshot.latestVersion}` : '已经是最新版本');
+    }
+    return snapshot;
+  } catch (error) {
+    if (error instanceof AuthError) return state.update;
+    state.update = { ...state.update, checking: false, error: error.message || '检查更新失败' };
+    renderUpdateUi();
+    if (!silent) toast(state.update.error, 'error');
+    return state.update;
   }
 }
 
-function ctxDownloadUrl(configUrl) {
+// 切回窗口 / 网络恢复时补查一次，但别太频繁
+function maybeAutoCheckUpdate() {
+  if ($('#app-view').hidden || updateJob) return;
+  const last = Date.parse(state.update.attemptedAt || state.update.checkedAt || '') || 0;
+  if (Date.now() - last < 10 * 60 * 1000) return;
+  requestUpdateCheck({ silent: true });
+}
+
+async function waitForRestart(expectedVersion, timeout = 45000) {
+  const started = Date.now();
+  let oldSince = 0;
+
+  while (Date.now() - started < timeout) {
+    try {
+      const response = await fetch(`/api/version?ts=${Date.now()}`, { cache: 'no-store' });
+      if (response.ok) {
+        const info = await response.json();
+        if (String(info.version || '') === expectedVersion) {
+          location.reload();
+          return true;
+        }
+        if (info.version) {
+          if (!oldSince) oldSince = Date.now();
+          // 重启回来还是旧版本，基本就是回滚了，不用傻等 45 秒
+          if (Date.now() - started > 8000 && Date.now() - oldSince > 1500) return false;
+        }
+      }
+    } catch {
+      /* 服务正在重启，继续等 */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  }
+  return false;
+}
+
+async function applyUpdate() {
+  if (updateJob && updateJob.phase !== 'error') return;
+  const update = state.update;
+  if (!update.hasUpdate) return;
+  if (!update.canSelfUpdate || !update.selfUpdateEnabled) {
+    toast('这次更新没有文件清单，请下载完整包', 'error');
+    return;
+  }
+
+  const expected = update.latestVersion;
+  let accepted = false;
+  updateJob = { phase: 'manifest', message: '正在准备更新…', done: 0, total: 0, error: '', version: expected };
+  renderUpdateUi();
+
   try {
-    return new URL('.', configUrl).href;
+    await api('/api/update/apply', { method: 'POST' });
+    accepted = true;
+    updateJob = {
+      phase: 'restart',
+      message: '文件已更新，正在重启服务…',
+      done: 0,
+      total: 0,
+      error: '',
+      version: expected,
+    };
+    renderUpdateUi();
+
+    const ok = await waitForRestart(expected);
+    if (!ok) throw new Error('服务没有在 45 秒内恢复，请手动关闭窗口并重新双击 启动.bat');
+  } catch (error) {
+    if (error instanceof AuthError) {
+      updateJob = null;
+      renderUpdateUi();
+      return;
+    }
+
+    // 服务可能在响应前就退出了：先确认是不是已经装好并重启
+    // （409/500 这类明确拒绝就直接报错，不用等）
+    const networkLike =
+      error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(String(error.message || ''));
+    if (!accepted && networkLike) {
+      updateJob.phase = 'restart';
+      updateJob.message = '正在确认更新结果…';
+      renderUpdateUi();
+      const ok = await waitForRestart(expected, 20000);
+      if (ok) return;
+    }
+
+    updateJob = {
+      phase: 'error',
+      message: '更新失败，已恢复上一版或没有改动。可以重试，或下载离线包。',
+      done: 0,
+      total: 0,
+      error: error.message || '更新失败',
+      version: expected,
+    };
+    renderUpdateUi();
+    toast(updateJob.error, 'error');
+    fetchUpdateState().catch(() => {});
+  }
+}
+
+function cleanUpdateNote(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[：:\s]+/, '')
+    .trim();
+}
+
+function applyUpdateSnapshot(snapshot, { announce = true } = {}) {
+  if (!snapshot || typeof snapshot !== 'object') return;
+
+  // 更新失败后如果又出现了另一个版本，旧错误就不再适用
+  if (
+    updateJob &&
+    updateJob.phase === 'error' &&
+    updateJob.version &&
+    snapshot.hasUpdate &&
+    snapshot.latestVersion !== updateJob.version
+  ) {
+    updateJob = null;
+  }
+
+  // GET /api/update 和 SSE 可能一前一后到达，别让旧快照把新结果盖回去
+  const incomingAt = Date.parse(snapshot.attemptedAt || snapshot.checkedAt || '') || 0;
+  const currentAt = Date.parse(state.update.attemptedAt || state.update.checkedAt || '') || 0;
+  if (incomingAt && currentAt && incomingAt < currentAt) return;
+
+  state.update = {
+    ...state.update,
+    ...snapshot,
+    checking: Boolean(snapshot.checking),
+    providers: Array.isArray(snapshot.providers) ? snapshot.providers : [],
+  };
+  renderUpdateUi();
+
+  if (!announce || !snapshot.hasUpdate || !snapshot.latestVersion) return;
+  if (localStorage.getItem(UPDATE_SEEN_KEY) === snapshot.latestVersion) return;
+
+  localStorage.setItem(UPDATE_SEEN_KEY, snapshot.latestVersion);
+  const note = cleanUpdateNote(snapshot.notes);
+  toast(`有新版本 ${snapshot.latestVersion}${note ? `：${note.slice(0, 40)}` : ''}`);
+  maybeShowDesktopNotification(snapshot);
+}
+
+function renderUpdateUi() {
+  const update = state.update;
+
+  const bar = $('#update-bar');
+  if (bar) {
+    const dismissed =
+      Boolean(update.latestVersion) && sessionStorage.getItem(UPDATE_SKIP_KEY) === update.latestVersion;
+    const show = Boolean(update.hasUpdate) && !dismissed;
+    bar.hidden = !show;
+
+    if (show) {
+      const note = cleanUpdateNote(update.notes);
+      $('#update-text').textContent = `有新版本 ${update.latestVersion}${note ? `：${note.slice(0, 80)}` : ''}`;
+      const link = $('#update-link');
+      if (link) link.href = update.downloadUrl || update.releaseUrl || RELEASES_URL;
+    }
+  }
+
+  const dot = $('#menu-dot');
+  if (dot) dot.hidden = !update.hasUpdate;
+
+  const menuButton = $('#menu-btn');
+  if (menuButton) {
+    menuButton.classList.toggle('has-update', Boolean(update.hasUpdate));
+    menuButton.title = update.hasUpdate ? `更多（有新版本 ${update.latestVersion}）` : '更多';
+  }
+
+  if (updateDialogRefresh) updateDialogRefresh();
+}
+
+function dismissUpdateBar() {
+  if (state.update.latestVersion) {
+    sessionStorage.setItem(UPDATE_SKIP_KEY, state.update.latestVersion);
+  }
+  renderUpdateUi();
+}
+
+function fmtUpdateTime(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function desktopNotifyEnabled() {
+  return localStorage.getItem(UPDATE_NOTIFY_KEY) === '1';
+}
+
+async function setDesktopNotify(enabled) {
+  if (!enabled) {
+    localStorage.setItem(UPDATE_NOTIFY_KEY, '0');
+    return true;
+  }
+  if (!('Notification' in window)) {
+    toast('这个浏览器不支持系统通知', 'error');
+    return false;
+  }
+
+  let permission = Notification.permission;
+  if (permission === 'default') {
+    try {
+      permission = await Notification.requestPermission();
+    } catch {
+      permission = 'denied';
+    }
+  }
+  if (permission !== 'granted') {
+    localStorage.setItem(UPDATE_NOTIFY_KEY, '0');
+    toast('没有拿到通知权限，可在地址栏的站点设置里重新允许', 'error');
+    return false;
+  }
+
+  localStorage.setItem(UPDATE_NOTIFY_KEY, '1');
+  return true;
+}
+
+async function maybeShowDesktopNotification(snapshot) {
+  if (!desktopNotifyEnabled()) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+  const title = `学习中心 ${snapshot.latestVersion} 已发布`;
+  const body = (cleanUpdateNote(snapshot.notes) || '打开应用看看这次更新了什么').slice(0, 120);
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('service worker 未就绪')), 2500)),
+      ]);
+      await registration.showNotification(title, {
+        body,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: `learning-hub-update-${snapshot.latestVersion}`,
+        data: { url: '/' },
+      });
+      return;
+    }
+    new Notification(title, {
+      body,
+      icon: '/icon-192.png',
+      tag: `learning-hub-update-${snapshot.latestVersion}`,
+    });
   } catch {
-    return configUrl;
+    /* 通知失败不影响页面里的提示条 */
   }
 }
 
 // 更新入口内置在平台里：地址固定，用户不用再去问「网站是多少」
 function openUpdatePage() {
-  const link = el(
+  const root = el('div', { class: 'update-dialog' });
+
+  const closeButton = el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '关闭');
+  const checkButton = el('button', { type: 'button', class: 'btn ghost' }, '立即检查');
+  const downloadButton = el(
     'a',
     { class: 'btn primary', href: RELEASES_URL, target: '_blank', rel: 'noopener noreferrer' },
-    '打开发布页',
+    '去下载',
   );
+  const applyButton = el('button', { type: 'button', class: 'btn primary' }, '立即更新');
+
+  checkButton.addEventListener('click', () => requestUpdateCheck());
+  applyButton.addEventListener('click', () => applyUpdate());
+
+  const notifyCheckbox = el('input', { type: 'checkbox', checked: desktopNotifyEnabled() });
+  notifyCheckbox.addEventListener('change', async () => {
+    const ok = await setDesktopNotify(notifyCheckbox.checked);
+    notifyCheckbox.checked = desktopNotifyEnabled();
+    if (ok && notifyCheckbox.checked) toast('已开启：发现新版本时会弹系统通知');
+  });
+  const notifyField = el(
+    'label',
+    { class: 'field checkbox-field update-notify' },
+    el('span', { class: 'check' }, notifyCheckbox, '发现新版本时弹系统通知'),
+    el('small', { class: 'field-hint' }, '需要浏览器允许通知；只在本机弹窗，不会发到任何服务器。'),
+  );
+  if (!('Notification' in window)) notifyField.hidden = true;
+
+  function render() {
+    if (!root.isConnected) {
+      updateDialogRefresh = null;
+      return;
+    }
+
+    const update = state.update;
+    const releaseUrl = update.releaseUrl || RELEASES_URL;
+    const parts = [];
+
+    if (updateJob) {
+      const job = updateJob;
+      parts.push(
+        el(
+          'div',
+          { class: `update-job${job.phase === 'error' ? ' error' : ''}` },
+          el('strong', {}, job.phase === 'error' ? '更新失败' : job.phase === 'restart' ? '正在重启' : '正在更新'),
+          el('span', {}, job.message || ''),
+          job.phase !== 'error' && job.total
+            ? el('span', { class: 'muted tiny' }, `${job.done || 0}/${job.total}`)
+            : null,
+        ),
+      );
+    }
+
+    parts.push(
+      el(
+        'div',
+        { class: 'update-versions' },
+        el(
+          'div',
+          { class: 'update-version' },
+          el('span', { class: 'muted tiny' }, '当前版本'),
+          el('strong', {}, `v${update.currentVersion || state.version || '—'}`),
+        ),
+        el('span', { class: 'update-arrow', 'aria-hidden': 'true' }, '→'),
+        el(
+          'div',
+          { class: 'update-version' },
+          el('span', { class: 'muted tiny' }, '最新版本'),
+          el('strong', {}, update.latestVersion ? `v${update.latestVersion}` : update.checking ? '检查中…' : '—'),
+        ),
+      ),
+    );
+
+    if (update.hasUpdate) {
+      parts.push(el('p', { class: 'update-title' }, `发现新版本 ${update.latestVersion}`));
+      if (update.notes) parts.push(el('div', { class: 'update-notes' }, update.notes));
+      const meta = [];
+      if (update.publishedAt) meta.push(`发布于 ${fmtUpdateTime(update.publishedAt)}`);
+      if (update.source) meta.push(`来源：${update.source}`);
+      if (meta.length) parts.push(el('p', { class: 'muted tiny' }, meta.join(' · ')));
+      parts.push(
+        el(
+          'p',
+          { class: 'muted tiny' },
+          update.canSelfUpdate && update.selfUpdateEnabled
+            ? '应用内更新只下载有变化的程序文件（通常几百 KB），不会重新下载 31 MB 完整包；失败了也可以下载约 1 MB 的离线包覆盖。'
+            : '这次更新没有可用的文件清单，请下载离线包覆盖。',
+        ),
+      );
+    } else if (update.checking) {
+      parts.push(el('p', { class: 'muted' }, '正在检查更新…'));
+    } else if (update.error) {
+      parts.push(el('p', { class: 'error' }, update.error));
+      if (update.checkedAt) {
+        parts.push(el('p', { class: 'muted tiny' }, `上次成功检查：${fmtUpdateTime(update.checkedAt)}`));
+      }
+    } else if (update.checkedAt) {
+      parts.push(el('p', { class: 'muted' }, '已经是最新版本。'));
+      parts.push(
+        el(
+          'p',
+          { class: 'muted tiny' },
+          `上次检查：${fmtUpdateTime(update.checkedAt)}${update.source ? ` · 来源：${update.source}` : ''}`,
+        ),
+      );
+    } else {
+      parts.push(el('p', { class: 'muted' }, '还没有检查过更新。'));
+    }
+
+    if (update.error && (update.hasUpdate || update.checkedAt)) {
+      parts.push(el('p', { class: 'muted tiny' }, update.error));
+    }
+
+    if (update.lastApplyError && !updateJob) {
+      parts.push(el('p', { class: 'error' }, `上次更新失败：${update.lastApplyError.message}`));
+    }
+
+    parts.push(
+      el(
+        'p',
+        { class: 'muted tiny update-auto' },
+        `程序在后台每 ${update.intervalMinutes || 30} 分钟自动检查一次（关掉窗口也会查）；发现新版本会马上提示，不用自己盯着。`,
+      ),
+    );
+    parts.push(notifyField);
+    parts.push(
+      el(
+        'p',
+        { class: 'muted tiny' },
+        '下载页固定不变：',
+        el(
+          'a',
+          { href: releaseUrl, target: '_blank', rel: 'noopener noreferrer', class: 'update-url' },
+          releaseUrl,
+        ),
+      ),
+    );
+
+    root.replaceChildren(...parts);
+
+    const busy = Boolean(updateJob && updateJob.phase !== 'error');
+
+    closeButton.textContent = update.hasUpdate ? '稍后' : '关闭';
+    checkButton.disabled = update.checking || busy;
+    checkButton.textContent = update.checking ? '检查中…' : '立即检查';
+    downloadButton.hidden = !update.hasUpdate || busy;
+    downloadButton.className = update.canSelfUpdate && update.selfUpdateEnabled ? 'btn ghost' : 'btn primary';
+    downloadButton.textContent = update.canSelfUpdate && update.selfUpdateEnabled ? '下载离线包' : '去下载';
+    if (update.hasUpdate) downloadButton.href = update.downloadUrl || releaseUrl;
+    applyButton.hidden = !(update.hasUpdate && update.canSelfUpdate && update.selfUpdateEnabled);
+    applyButton.disabled = update.checking || busy;
+    applyButton.textContent = updateJob && updateJob.phase === 'error' ? '重试更新' : busy ? '更新中…' : '立即更新';
+  }
+
+  updateDialogRefresh = render;
 
   const form = openModal({
-    title: '获取更新',
-    body: [
-      el('p', {}, `当前版本：${state.version || '—'}`),
-      el(
-        'p',
-        { class: 'muted tiny' },
-        '发布页地址是固定的，每次发版只换里面的文件，不会换网址。以后要更新，从这里进就行，不用再找别人要网站。',
-      ),
-      el(
-        'p',
-        { class: 'muted tiny' },
-        el('a', { href: RELEASES_URL, target: '_blank', rel: 'noopener noreferrer', class: 'update-url' }, RELEASES_URL),
-      ),
-    ],
-    footer: [el('button', { type: 'button', class: 'btn ghost', onclick: closeModal }, '关闭'), link],
+    title: '检查更新',
+    body: root,
+    footer: [closeButton, checkButton, downloadButton, applyButton],
   });
-
   form.addEventListener('submit', (event) => event.preventDefault());
+
+  render();
+
+  const last = Date.parse(state.update.attemptedAt || '') || 0;
+  if (!state.update.checkedAt || Date.now() - last > 5 * 60 * 1000) {
+    requestUpdateCheck({ silent: true });
+  }
 }
 
 let lastRefreshAt = 0;
@@ -1589,7 +2119,7 @@ function openSettings() {
         el(
           'small',
           { class: 'field-hint' },
-          '填一个返回 {"version":"2.2.1","notes":"…","url":"下载地址"} 的网址；打开时会自动检查，有新版本会在顶部提示。不填就不检查。',
+          '留空就用内置的官方线路（GitHub + jsDelivr 多条线路自动重试）。也可以填一个返回 {"version":"2.6.0","notes":"…","url":"下载地址"} 的网址；应用运行期间会自动检查，发现新版本立刻在界面里提示，不用手动刷新。',
         ),
       ),
     ],
@@ -2901,19 +3431,21 @@ function bindEvents() {
   $('#task-btn').addEventListener('click', () => openTaskModal());
   $('#refresh-btn').addEventListener('click', refreshNow);
 
-  $('#update-close').addEventListener('click', () => {
-    $('#update-bar').hidden = true;
-    const text = $('#update-text').textContent || '';
-    const match = text.match(/有新版本\s+([\d.]+)/);
-    if (match) sessionStorage.setItem('learning-hub-skip-update', match[1]);
-  });
+  $('#update-close').addEventListener('click', dismissUpdateBar);
+  $('#update-detail').addEventListener('click', openUpdatePage);
 
   // 从别的标签页/窗口切回来时自动拉一次，避免手动点
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     if ($('#app-view').hidden) return;
-    if (Date.now() - lastRefreshAt < 4000) return;
-    refresh().catch(() => {});
+    if (Date.now() - lastRefreshAt >= 4000) refresh().catch(() => {});
+    fetchUpdateState().catch(() => {});
+    maybeAutoCheckUpdate();
+  });
+
+  window.addEventListener('online', () => {
+    requestUpdateCheck({ silent: true });
+    if (!updateStream) connectUpdateChannel();
   });
   $('#theme-btn').addEventListener('click', cycleTheme);
 
@@ -2940,6 +3472,7 @@ function bindEvents() {
   });
 
   $('#affairs-btn')?.addEventListener('click', () => setView('affairs'));
+  $('#code-btn')?.addEventListener('click', () => setView('code'));
 
   /* 事务视图的控制条（旧页面里没有这些元素，跳过即可） */
   if ($('#affairs-view')) {
@@ -3042,6 +3575,9 @@ function bindEvents() {
     const tag = (event.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || event.target.isContentEditable;
     if (typing || modalEl) return;
+    // Shadow DOM 里的事件到 document 时 target 会被重定向成宿主，
+    // 所以代码学习视图下不要触发 N/T/A 这些全局快捷键。
+    if (state.view === 'code') return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
 
     if (event.key === '/') {

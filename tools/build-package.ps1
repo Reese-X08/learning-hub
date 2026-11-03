@@ -80,4 +80,4 @@ if (Get-Command tar -ErrorAction SilentlyContinue) {
 
 $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 Write-Host "完成：$zip（$size MB）"
-Write-Host '下一步：到 GitHub 建一个 Release，把 zip 传上去；version.json 里的 url 改成这个 Release 地址。'
+Write-Host '下一步：打 tag；CI 会生成 update-manifest.json，并把 learning-hub-portable.zip / learning-hub-code.zip 上传 Release。'

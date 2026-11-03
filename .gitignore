@@ -2,6 +2,7 @@
 data/
 node_modules/
 .cache/
+tests/.tmp/
 
 # 构建产物
 dist/
@@ -19,3 +20,7 @@ local.bat
 
 # 个人备忘（含本机路径，不上传）
 GITHUB-*.md
+插件开发记录.md
+
+# 个人工作区（AI 记忆、无关的练手项目）
+DSHcodelearning/

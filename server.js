@@ -13,17 +13,24 @@ const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const os = require('node:os');
+const { spawn } = require('node:child_process');
 
 const { createStore, StoreError } = require('./lib/store.js');
+const { createUpdateChecker, compareVersions, normalizeVersion } = require('./lib/updates.js');
+const { applySelfUpdate, rollbackFiles } = require('./lib/self-update.js');
 
 // 版本号：打包时会从 package.json 同步，界面上用来确认有没有更新成功
-const APP_VERSION = (() => {
+const PACKAGE_INFO = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || '0.0.0';
+    return JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
   } catch {
-    return '0.0.0';
+    return {};
   }
 })();
+const APP_VERSION = PACKAGE_INFO.version || '0.0.0';
+const REPOSITORY_URL =
+  (PACKAGE_INFO.repository && (PACKAGE_INFO.repository.url || PACKAGE_INFO.repository)) ||
+  'https://github.com/Reese-X08/learning-hub';
 
 const COOKIE_NAME = 'xy_session';
 const SESSION_TTL = 14 * 24 * 60 * 60 * 1000;
@@ -53,9 +60,13 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self'",
+  // 代码学习台沿用了大量 style="..." 的既有排版；只放开内联样式属性，
+  // <style> 标签和脚本仍然必须来自本站。
+  "style-src-attr 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
-  "connect-src 'self' https:",
+  // https 给各大模型 API；http 给本机 Ollama / LM Studio 这类自定义接口
+  "connect-src 'self' https: http:",
   "manifest-src 'self'",
   "worker-src 'self'",
   "base-uri 'none'",
@@ -173,10 +184,211 @@ function createHubServer(options = {}) {
   const port = options.port === undefined ? 4173 : Number(options.port);
   const quiet = options.quiet === true;
   const persistPassword = options.persistPassword !== false;
+  // 直接 node server.js 启动时才允许自更新；被桌面端内嵌时交给桌面端自己处理
+  const selfUpdateEnabled =
+    options.selfUpdate === true || (options.selfUpdate !== false && require.main === module);
 
   const store = createStore(dataDir);
   const authFile = path.join(dataDir, 'auth.json');
   const filesDir = path.join(dataDir, 'files');
+  const codeLabProfilesFile = path.join(dataDir, 'code-lab-profiles.json');
+
+  /* 新版本检查：后台定时查，变化时通过 SSE 推给所有窗口 */
+
+  const eventClients = new Set();
+  const MAX_EVENT_CLIENTS = 32;
+  const updateErrorFile = path.join(dataDir, 'update-error.json');
+  let lastApplyError = null;
+  let applyingUpdate = false;
+  let listeningPort = Number(port) || 4173;
+  let listeningHost = host;
+
+  const updates = createUpdateChecker({
+    currentVersion: APP_VERSION,
+    dataDir,
+    repositoryUrl: REPOSITORY_URL,
+    logger: console,
+  });
+  updates.on('change', (snapshot) => broadcastUpdate(snapshot));
+
+  function detachEventClient(client) {
+    if (!client || client.closed) return;
+    client.closed = true;
+    if (client.heartbeat) clearInterval(client.heartbeat);
+    eventClients.delete(client);
+    try {
+      client.res.end();
+    } catch {
+      /* 窗口已经关掉了 */
+    }
+  }
+
+  function publicUpdate(snapshot) {
+    return {
+      ...snapshot,
+      selfUpdateEnabled,
+      lastApplyError,
+    };
+  }
+
+  function broadcastEvent(event, payload) {
+    if (!eventClients.size) return;
+    const frame = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of eventClients) {
+      try {
+        client.res.write(frame);
+      } catch {
+        detachEventClient(client);
+      }
+    }
+  }
+
+  function broadcastUpdate(snapshot) {
+    broadcastEvent('update', publicUpdate(snapshot));
+  }
+
+  async function writeApplyError(version, message) {
+    lastApplyError = {
+      version: String(version || ''),
+      message: String(message || '更新失败'),
+      at: new Date().toISOString(),
+    };
+    try {
+      await fsp.mkdir(dataDir, { recursive: true });
+      await fsp.writeFile(updateErrorFile, `${JSON.stringify(lastApplyError, null, 2)}\n`, 'utf8');
+    } catch {
+      /* 错误信息写不进去也不影响主流程 */
+    }
+  }
+
+  async function loadApplyError() {
+    try {
+      const data = JSON.parse(await fsp.readFile(updateErrorFile, 'utf8'));
+      if (!data || !data.message) return;
+      // 已经装到报错版本或更高版本，旧错误就过期了
+      if (data.version && compareVersions(APP_VERSION, data.version) >= 0) {
+        await fsp.rm(updateErrorFile, { force: true });
+        lastApplyError = null;
+        return;
+      }
+      lastApplyError = {
+        version: String(data.version || ''),
+        message: String(data.message),
+        at: String(data.at || ''),
+      };
+    } catch {
+      /* 没有错误记录 */
+    }
+  }
+
+  async function recoverInterruptedUpdate() {
+    const planFile = path.join(dataDir, 'update-plan.json');
+    let plan;
+    try {
+      plan = JSON.parse(await fsp.readFile(planFile, 'utf8'));
+    } catch {
+      return;
+    }
+    if (!plan || !plan.version || !Array.isArray(plan.files)) return;
+
+    // 程序目录可能被整体搬过，以当前路径=data 目录为准
+    plan.appDir = __dirname;
+    plan.backupDir = path.join(dataDir, 'update-backup', String(plan.version));
+
+    let installed = '';
+    try {
+      installed = normalizeVersion(JSON.parse(await fsp.readFile(path.join(__dirname, 'package.json'), 'utf8')).version);
+    } catch {
+      installed = '';
+    }
+
+    // package.json 是最后写入的；它已经是新版本，说明上次替换完整落盘了
+    if (installed && installed === normalizeVersion(plan.version)) {
+      await fsp.rm(planFile, { force: true });
+      return;
+    }
+
+    const failures = await rollbackFiles(plan, console);
+    await fsp.rm(planFile, { force: true });
+    if (failures.length) {
+      await writeApplyError(
+        plan.version,
+        `上次更新中断，而且这些文件没能回滚：${failures.join('、')}；请用完整包覆盖`,
+      );
+    } else {
+      await writeApplyError(plan.version, '上次更新中断，已自动恢复上一版');
+    }
+  }
+
+  function startRestartHelper(version) {
+    const helper = path.join(__dirname, 'lib', 'restart-helper.js');
+    const args = [
+      helper,
+      '--plan',
+      path.join(dataDir, 'update-plan.json'),
+      '--port',
+      String(listeningPort),
+      '--host',
+      listeningHost,
+      '--version',
+      version,
+      '--pid',
+      String(process.pid),
+      '--app',
+      __dirname,
+    ];
+
+    return new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: { ...process.env },
+      });
+      const timer = setTimeout(() => reject(new Error('重启助手启动超时')), 3000);
+      child.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once('spawn', () => {
+        clearTimeout(timer);
+        child.unref();
+        resolve(child);
+      });
+    });
+  }
+
+  function attachEventClient(req, res) {
+    if (eventClients.size >= MAX_EVENT_CLIENTS) {
+      return sendJson(res, 429, { error: '打开的窗口太多了，请关掉几个再试' });
+    }
+
+    baseHeaders(res);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('retry: 5000\n\n');
+    res.write(`event: update\ndata: ${JSON.stringify(publicUpdate(updates.snapshot()))}\n\n`);
+
+    const client = { res, heartbeat: null, closed: false };
+    client.heartbeat = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        detachEventClient(client);
+      }
+    }, 20 * 1000);
+    client.heartbeat.unref?.();
+    eventClients.add(client);
+
+    const cleanup = () => detachEventClient(client);
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+    res.on('error', cleanup);
+  }
 
   /* 事务附件：内容存 data/files/<id>，db.json 里只留元信息 */
 
@@ -494,6 +706,80 @@ function createHubServer(options = {}) {
       return sendJson(res, 401, { error: '登录状态已失效，请重新登录' });
     }
 
+    if (route === '/api/events' && method === 'GET') {
+      attachEventClient(req, res);
+      return;
+    }
+
+    if (route === '/api/update' && method === 'GET') {
+      return sendJson(res, 200, publicUpdate(updates.snapshot()));
+    }
+
+    if (route === '/api/update/check' && method === 'POST') {
+      const snapshot = await updates.check({ force: true });
+      return sendJson(res, 200, publicUpdate(snapshot));
+    }
+
+    if (route === '/api/update/apply' && method === 'POST') {
+      if (!selfUpdateEnabled) {
+        throw new HttpError(409, '当前启动方式不支持应用内更新，请下载完整包');
+      }
+      if (applyingUpdate) throw new HttpError(409, '正在更新，请稍候');
+      const snapshot = updates.snapshot();
+      if (!snapshot.hasUpdate) throw new HttpError(409, '当前已经是最新版本');
+      if (!snapshot.manifestUrl) throw new HttpError(409, '这个更新源没有提供文件清单，请下载完整包');
+
+      applyingUpdate = true;
+      try {
+        const result = await applySelfUpdate({
+          appDir: __dirname,
+          dataDir,
+          currentVersion: APP_VERSION,
+          expectedVersion: snapshot.latestVersion,
+          manifestUrl: snapshot.manifestUrl,
+          onProgress: (progress) => broadcastEvent('update-progress', progress),
+          logger: console,
+        });
+
+        lastApplyError = null;
+        await fsp.rm(updateErrorFile, { force: true }).catch(() => {});
+        await startRestartHelper(result.version);
+
+        // 等响应真正发出去再退出，避免浏览器只看到连接被断开
+        const fallback = setTimeout(() => process.exit(0), 2000);
+        res.once('finish', () => {
+          clearTimeout(fallback);
+          setTimeout(() => process.exit(0), 400);
+        });
+        sendJson(res, 200, {
+          ok: true,
+          version: result.version,
+          changed: result.changed,
+          restarting: true,
+        });
+        return;
+      } catch (error) {
+        await writeApplyError(snapshot.latestVersion, error.message);
+        broadcastUpdate(updates.snapshot());
+        throw new HttpError(500, `更新失败：${error.message}`);
+      } finally {
+        applyingUpdate = false;
+      }
+    }
+
+    if (route === '/api/code-lab/profiles' && method === 'GET') {
+      return sendJson(res, 200, await readCodeLabProfiles());
+    }
+
+    if (route === '/api/code-lab/profiles' && (method === 'PUT' || method === 'POST')) {
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || !Array.isArray(body.profiles)) {
+        throw new HttpError(400, '配置记忆格式不对');
+      }
+      const saved = await writeCodeLabProfiles(body);
+      return sendJson(res, 200, { ok: true, count: saved.profiles.length, updatedAt: saved.updatedAt });
+    }
+
     if (route === '/api/data' && method === 'GET') {
       const data = await store.snapshot();
       return sendJson(res, 200, {
@@ -643,6 +929,8 @@ function createHubServer(options = {}) {
       const body = await readBody(req);
       const settings = await store.saveSettings(body);
       requirePassword = settings.requirePassword !== false;
+      // 换了更新地址就重新查一次，不用等下一个 30 分钟
+      updates.setCustomUrl(settings.updateUrl);
       return sendJson(res, 200, { settings });
     }
 
@@ -679,12 +967,102 @@ function createHubServer(options = {}) {
     throw new HttpError(404, '接口不存在');
   }
 
+  /* 代码学习配置记忆：只存平台 / 地址 / Key / 模型，登录后可读写 */
+
+  function profileText(value, max) {
+    return typeof value === 'string' ? value.trim().slice(0, max) : '';
+  }
+
+  function normalizeCodeLabProfile(item) {
+    if (!item || typeof item !== 'object') return null;
+    const id = profileText(item.id, 64);
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
+    const name = profileText(item.name, 60);
+    if (!name) return null;
+    const createdAt = profileText(item.createdAt, 40);
+    const updatedAt = profileText(item.updatedAt, 40);
+    return {
+      id,
+      name,
+      provider: profileText(item.provider, 40) || 'deepseek',
+      apiBase: profileText(item.apiBase, 600),
+      apiKey: profileText(item.apiKey, 600),
+      model: profileText(item.model, 120),
+      proxy: profileText(item.proxy, 600),
+      createdAt: createdAt || new Date().toISOString(),
+      updatedAt: updatedAt || createdAt || new Date().toISOString(),
+    };
+  }
+
+  async function readCodeLabProfiles() {
+    const empty = { version: 1, profiles: [], activeProfileId: '', updatedAt: '' };
+    try {
+      const data = JSON.parse(await fsp.readFile(codeLabProfilesFile, 'utf8'));
+      if (!data || !Array.isArray(data.profiles)) return empty;
+      return {
+        version: 1,
+        profiles: data.profiles.map(normalizeCodeLabProfile).filter(Boolean).slice(0, 50),
+        activeProfileId: profileText(data.activeProfileId, 64),
+        updatedAt: profileText(data.updatedAt, 40),
+      };
+    } catch {
+      return empty;
+    }
+  }
+
+  async function writeCodeLabProfiles(payload) {
+    const profiles = (Array.isArray(payload.profiles) ? payload.profiles : [])
+      .map(normalizeCodeLabProfile)
+      .filter(Boolean)
+      .slice(0, 50);
+    const data = {
+      version: 1,
+      profiles,
+      activeProfileId: profileText(payload.activeProfileId, 64),
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJsonAtomic(codeLabProfilesFile, data);
+    return data;
+  }
+
+  /* 代码学习配置：可选文件放在 data/ 下，登录后才能读取（里面可能有 API Key） */
+
+  async function serveCodeLabConfig(req, res) {
+    if (!isAuthed(req)) {
+      return sendJson(res, 401, { error: '登录状态已失效，请重新登录' });
+    }
+    let body = 'window.WB_CONFIG = null;\n';
+    try {
+      const file = path.join(dataDir, 'code-lab-config.js');
+      const stat = await fsp.stat(file);
+      if (stat.isFile() && stat.size <= 1024 * 1024) {
+        body = await fsp.readFile(file, 'utf8');
+      }
+    } catch {
+      /* 没有配置文件就返回空配置，工作台照常启动 */
+    }
+    const buffer = Buffer.from(body, 'utf8');
+    baseHeaders(res);
+    res.writeHead(200, {
+      'Content-Type': 'text/javascript; charset=utf-8',
+      'Content-Length': buffer.length,
+      'Cache-Control': 'no-store',
+    });
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+    res.end(buffer);
+  }
+
   /* 服务器 */
 
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname.startsWith('/api/')) {
+      if (url.pathname === '/code-lab-config.js' && (req.method === 'GET' || req.method === 'HEAD')) {
+        await serveCodeLabConfig(req, res);
+      } else if (url.pathname.startsWith('/api/')) {
         await handleApi(req, res, url);
       } else if (req.method === 'GET' || req.method === 'HEAD') {
         await serveStatic(req, res, url);
@@ -707,8 +1085,12 @@ function createHubServer(options = {}) {
 
   async function listen() {
     await initAuth();
+    await recoverInterruptedUpdate();
+    await loadApplyError();
     const initial = await store.snapshot(); // 确保 data/db.json 存在
     requirePassword = initial.settings?.requirePassword !== false;
+    updates.setCustomUrl(initial.settings?.updateUrl || '');
+    await updates.start();
 
     await new Promise((resolve, reject) => {
       const onError = (err) => reject(err);
@@ -721,6 +1103,8 @@ function createHubServer(options = {}) {
 
     const address = server.address();
     const actualPort = typeof address === 'object' && address ? address.port : port;
+    listeningPort = actualPort;
+    listeningHost = host;
     const shownHost = host === '0.0.0.0' || host === '::' ? 'localhost' : host;
 
     if (!quiet && options.banner !== false) {
@@ -732,12 +1116,14 @@ function createHubServer(options = {}) {
 
   function close() {
     return new Promise((resolve) => {
+      updates.stop();
+      for (const client of [...eventClients]) detachEventClient(client);
       server.close(() => resolve());
       setTimeout(() => resolve(), 1500).unref();
     });
   }
 
-  return { listen, close, server, store, dataDir, publicDir };
+  return { listen, close, server, store, updates, dataDir, publicDir };
 }
 
 function lanAddresses() {

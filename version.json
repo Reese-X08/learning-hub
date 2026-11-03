@@ -1,5 +1,5 @@
 {
-  "version": "2.5.1",
-  "notes": "收集弹窗支持全选/全不选，实时显示已选数量",
-  "url": "https://github.com/Reese-X08/learning-hub/releases/latest"
+  "version": "2.9.0",
+  "notes": "新增 API 平台蓝链、小白教程和「读取模型」：常用配置只填 Key，模型直接从平台读取并选择",
+  "url": "https://github.com/Reese-X08/learning-hub/releases/latest/download/learning-hub-code.zip"
 }

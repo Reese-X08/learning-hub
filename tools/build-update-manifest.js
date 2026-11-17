@@ -18,7 +18,7 @@ const { validateRelativePath } = require('../lib/self-update.js');
 
 const root = path.resolve(__dirname, '..');
 const outputFile = path.join(root, 'update-manifest.json');
-const TEXT_FILE = /\.(?:js|json|html|css|webmanifest|svg|txt)$/i;
+const TEXT_FILE = /\.(?:js|json|html|css|webmanifest|svg|txt|ps1)$/i;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 40 * 1024 * 1024;
 
@@ -60,7 +60,7 @@ function build() {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   const files = [];
 
-  for (const rel of ['server.js', 'package.json', 'version.json']) addFile(files, rel);
+  for (const rel of ['server.js', 'package.json', 'version.json', 'updater.ps1']) addFile(files, rel);
   walk(files, 'lib');
   walk(files, 'public');
 

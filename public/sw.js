@@ -3,7 +3,7 @@
 // 最小可用的 Service Worker：只为让浏览器允许「安装成应用」，并提供一个离线兜底。
 // 策略是「网络优先，失败才用缓存」，所以正常联网时不会拿到旧版本文件。
 
-const VERSION = '2.9.0';
+const VERSION = '2.10.0';
 const CACHE = `learning-hub-${VERSION}`;
 const PRECACHE = [
   '/',

@@ -1,5 +1,6 @@
 {
-  "version": "2.9.0",
-  "notes": "新增 API 平台蓝链、小白教程和「读取模型」：常用配置只填 Key，模型直接从平台读取并选择",
-  "url": "https://github.com/Reese-X08/learning-hub/releases/latest/download/learning-hub-code.zip"
+  "version": "2.10.0",
+  "notes": "新增独立自动更新器：双击 更新.bat 自动下载、替换、重启，不再手动覆盖；同时修复更新后版本号不刷新的问题",
+  "url": "https://github.com/Reese-X08/learning-hub/releases/latest/download/learning-hub-updater.zip",
+  "codeUrl": "https://github.com/Reese-X08/learning-hub/releases/latest/download/learning-hub-code.zip"
 }

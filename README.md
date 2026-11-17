@@ -83,6 +83,7 @@
 
 - 本地网页 + 可「安装为应用」，独立窗口运行
 - **应用内更新推送 + 自更新**：服务端后台定时检查，发现新版本通过 SSE 实时推到页面——顶部提示条 + 菜单小红点 + 可选系统通知；点「立即更新」只下载有变化的程序文件（通常几百 KB），自动重启，失败自动回滚，不用每次重下 31MB 完整包
+- **独立自动更新器 `更新.bat`**：双击就自动检查、下载、停服务、替换、重启、打开，不需要手动解压覆盖；旧版本第一次升级也能用它
 - 可选访问密码（scrypt 散列）、导出 / 导入备份
 - 便携包内置 Node 运行时，解压即用，不用装任何东西
 
@@ -98,11 +99,13 @@
 > 或运行时点「更多信息 → 仍要运行」。这是未签名程序的通用提示，不代表有风险。
 >
 > GitHub 会过滤附件名里的中文，发布时 CI 会把它们改成 `learning-hub-portable.zip` /
-> `learning-hub-code.zip`；本地构建产物仍然是 `学习中心-便携版.zip` / `学习中心-代码更新包.zip`。
+> `learning-hub-code.zip` / `learning-hub-updater.zip`；本地构建产物仍然是
+> `学习中心-便携版.zip` / `学习中心-代码更新包.zip` / `学习中心-自动更新器.zip`。
 
-> **已经装过旧版？** 不用重下 31MB：到 Releases 下载 `learning-hub-code.zip`（约 0.2MB），
-> 解压覆盖原来的「学习中心」文件夹即可（保留 `node/` 和 `data/`）。装到 2.6.0 后，
-> 后续版本直接在应用里点「立即更新」，只下载变化的文件。
+> **已经装过旧版？** 不用重下 31MB，也不用手动覆盖：到 Releases 下载
+> `learning-hub-updater.zip`（约 20KB），解压后双击 `更新.bat`，按提示选择
+> 「学习中心」文件夹即可。它会自动下载代码包、替换并重启。
+> 装好 2.10.0 后，后续版本可以直接在应用里点「立即更新」。
 
 ### 方式二：从源码运行
 
@@ -165,6 +168,8 @@ node server.js
 ├── lib/updates.js          # 更新检查：多线路轮询、版本比较、SSE 推送
 ├── lib/self-update.js      # 自更新：只下载变化的文件、校验、备份与回滚
 ├── lib/restart-helper.js   # 自更新重启助手：健康检查、失败回滚
+├── updater.ps1             # 独立自动更新器：下载、停服务、替换、重启
+├── 更新.bat                # 双击运行自动更新器
 ├── update-manifest.json    # 自更新文件清单（发版时由 CI 生成）
 ├── public/                 # 前端（可安装为 PWA）
 │   ├── code-lab.js         # 代码学习台：化简 / 逐行讲解 / 追问 / 历史
@@ -185,12 +190,13 @@ node server.js        # 本地起服务
 npm test              # 更新 / 自更新 / 清单 / 代码学习与配置记忆
 npm run manifest      # 重新生成 update-manifest.json
 npm run build         # 打便携包（首次会自动下载 Node 运行时）
+npm run build:updater # 打独立自动更新器（约 20KB）
 ```
 
 发版：改 `package.json` 和 `version.json` 里的版本 / 说明，提交后
 
 ```bash
-git tag v2.9.0
+git tag v2.10.0
 git push --tags
 ```
 
@@ -204,8 +210,8 @@ GitHub Actions 会自动打包并发布 Release（见 `.github/workflows/release
 - 更新检查要能访问 GitHub / jsDelivr；都连不上时界面会显示「暂时连不上更新服务」，不影响正常使用，恢复网络后会自动重试
 - **代码学习配置记忆含 API Key**：本机 localStorage 和 `data/code-lab-profiles.json` 都是明文，注意不要把 data 文件夹发给别人
 - **代码学习台的 AI 功能需要你自己准备 API Key**；国内 DeepSeek / 智谱 / 通义 / Kimi / 硅基流动和 OpenRouter 已实测支持浏览器直连，其它平台可能需要 CORS 代理
-- **从 2.5.1 升到 2.6.0 仍然要手动覆盖一次代码更新包**（老版本没有自更新代码，约 1MB，不用重下 31MB 完整包）；从 2.6.0 起，后续版本都可以在应用内一键更新
-- 应用内更新要求更新源旁边有 `update-manifest.json`；自己搭的更新源只放 `version.json` 时，界面会退回「下载完整包」
+- **旧版本（2.5.1 / 2.6.x / 2.9.x）第一次可以运行独立更新器**：下载 `learning-hub-updater.zip`，双击 `更新.bat`，自动完成，不再手动覆盖；装好后后续版本可以直接在应用里点「立即更新」
+- 应用内更新要求更新源旁边有 `update-manifest.json`；自己搭的更新源只放 `version.json` 时，界面会退回「下载更新器」
 - 更新检查走 Node 自己的 HTTPS，不读浏览器的代理设置；公司网络要求代理或自签证书时可能查不到，但课程和事务不受影响
 
 ## 免责声明

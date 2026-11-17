@@ -1,11 +1,11 @@
 {
   "format": 1,
-  "version": "2.9.0",
+  "version": "2.10.0",
   "files": [
     {
       "path": "lib/self-update.js",
-      "size": 16692,
-      "sha256": "5dd2f80b51b58ac70ef4ac551301f59e811fad004751db3d056e1a9d99d84dd3"
+      "size": 16716,
+      "sha256": "ab753ea2ea3a24b90b54b8702f63cf44b3ebcc4456f62a04a07d82e319749f89"
     },
     {
       "path": "lib/store.js",
@@ -19,13 +19,13 @@
     },
     {
       "path": "package.json",
-      "size": 877,
-      "sha256": "56bf16bec2ff4619c7512c988c7a66e8b6815950e1cfd985ac174f9810a8dbe7"
+      "size": 1068,
+      "sha256": "d27cd096ddf3bba3b48f81d71e1bb4cdeb4cb1189dad47feb156935854aac601"
     },
     {
       "path": "public/app.js",
-      "size": 131417,
-      "sha256": "8488f1c15e46abc1bb78144e742f379f417affbd3a952ade3dd7f5dee84c1181"
+      "size": 132235,
+      "sha256": "ce59705f22f0e04ef086ef31850c31f54a438900623cf3776ed2af76d6bf1ad6"
     },
     {
       "path": "public/code-lab.css",
@@ -64,8 +64,8 @@
     },
     {
       "path": "public/index.html",
-      "size": 13446,
-      "sha256": "b508fee3a05f4bc7f8b39f27c13ae678056bc66b0fb95fffc1bd5c14725cb9fd"
+      "size": 13582,
+      "sha256": "47e646d780c3a7e8a47efa9698a63c8bfc9a08ecf0133ddfb25fa382108d68b7"
     },
     {
       "path": "public/manifest.webmanifest",
@@ -74,13 +74,13 @@
     },
     {
       "path": "public/styles.css",
-      "size": 49612,
-      "sha256": "d4fc6552a642a2ce1845b32056beee4dc96cd983838526c1051393799f51eb73"
+      "size": 49961,
+      "sha256": "14cc74e45d734f4af2408cf8393254e66e60e3aae9346881976785b8d9cfa5cf"
     },
     {
       "path": "public/sw.js",
-      "size": 2074,
-      "sha256": "e04b95d87b367a85ee48865ad11eaf871380025ea990614748ff3bc56a43da9a"
+      "size": 2075,
+      "sha256": "fef2599ae5bfd2158aa788584947cbbd6b8fe8cbe039b2a9dd355039239f2341"
     },
     {
       "path": "server.js",
@@ -88,9 +88,14 @@
       "sha256": "f8ddd41b676c7c1a96c8ead185c990ca04e75a98786be847fee826d06c3290f3"
     },
     {
+      "path": "updater.ps1",
+      "size": 19774,
+      "sha256": "772f9e4e278fd32d3fca160e0f6f8f1086178bf8acc3cc165efa997a6607fe13"
+    },
+    {
       "path": "version.json",
-      "size": 264,
-      "sha256": "ae7f14381c368cf427acc35579bab1d21d19a8154a2fb666da53c7c90976bf56"
+      "size": 400,
+      "sha256": "f7f7ec9198f853e226ae7e5e56d688971b66c45495e1e9f8d8eafb5efd897d17"
     }
   ]
 }

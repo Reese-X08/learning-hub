@@ -32,6 +32,7 @@ Copy-Item 'extension' $app -Recurse
 Copy-Item 'lib' $app -Recurse
 Copy-Item 'server.js', 'package.json', 'version.json', '启动.bat', 'LICENSE' $app -Force
 Copy-Item 'templates\使用说明.txt', 'templates\更新说明.txt' $app -Force
+Copy-Item 'updater.ps1', '更新.bat', '更新器说明.txt' $app -Force
 
 # ── data：只放模板，不放 db.json ──
 $dataDir = Join-Path $app 'data'
@@ -80,4 +81,4 @@ if (Get-Command tar -ErrorAction SilentlyContinue) {
 
 $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 Write-Host "完成：$zip（$size MB）"
-Write-Host '下一步：打 tag；CI 会生成 update-manifest.json，并把 learning-hub-portable.zip / learning-hub-code.zip 上传 Release。'
+Write-Host '下一步：打 tag；CI 会生成 update-manifest.json，并把 portable / code / updater 三个 zip 上传 Release。'

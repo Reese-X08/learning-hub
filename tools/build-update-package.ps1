@@ -4,7 +4,7 @@
 #
 # 产物：学习中心-代码更新包.zip（约 1MB）
 # 用法：解压到原来的「学习中心」文件夹，覆盖同名文件；node/ 和 data/ 保留不动。
-# 适合 2.5.1 → 2.6.0 这种还没有自更新代码的第一次升级。
+# 作为独立更新器和应用内自更新的下载源；旧版本也可以手动覆盖。
 
 param(
   [string]$Version = ''
@@ -28,6 +28,7 @@ Copy-Item 'lib' $stage -Recurse
 Copy-Item 'server.js', 'package.json', 'version.json', '启动.bat' $stage -Force
 Copy-Item 'templates\使用说明.txt', 'templates\更新说明.txt' $stage -Force
 Copy-Item 'templates\代码更新说明.txt' $stage -Force
+Copy-Item 'updater.ps1', '更新.bat', '更新器说明.txt' $stage -Force
 
 $zip = Join-Path $root '学习中心-代码更新包.zip'
 if (Test-Path $zip) { Remove-Item $zip -Force }
@@ -36,4 +37,4 @@ Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Compression
 
 $size = [math]::Round((Get-Item $zip).Length / 1MB, 2)
 Write-Host "完成：$zip（$size MB）"
-Write-Host '覆盖解压到旧的「学习中心」文件夹即可，node/ 和 data/ 不会被覆盖。'
+Write-Host '这个包由更新器自动下载使用；手动覆盖时 node/ 和 data/ 不会被覆盖。'

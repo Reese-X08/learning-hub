@@ -418,6 +418,11 @@ function renderHeader() {
   document.title = title || '学习中心';
   $('#site-title').textContent = title || '学习中心';
   $('#site-subtitle').textContent = [semester, subtitle].filter(Boolean).join(' · ') || '把所有课程收进一个页面';
+  const badge = $('#version-badge');
+  if (badge) {
+    badge.textContent = state.version ? `v${state.version}` : '';
+    badge.hidden = !state.version;
+  }
 }
 
 function renderStats() {
@@ -1006,6 +1011,25 @@ let updatePollTimer = 0;
 let updateDialogRefresh = null;
 // 自动更新任务：{ phase, message, done, total, error }
 let updateJob = null;
+// 当前页面看到的服务端版本；服务端重启换版本后自动刷新页面
+let observedServerVersion = '';
+let reloadingForVersion = false;
+
+function noteServerVersion(version) {
+  const next = String(version || '').trim();
+  if (!next) return;
+
+  const previous = observedServerVersion;
+  observedServerVersion = next;
+  state.version = next;
+  renderHeader();
+
+  if (previous && previous !== next && !reloadingForVersion) {
+    reloadingForVersion = true;
+    toast(`程序已更新到 ${next}，正在刷新…`);
+    setTimeout(() => location.reload(), 500);
+  }
+}
 
 function connectUpdateChannel() {
   if ($('#app-view').hidden) return;
@@ -1171,7 +1195,7 @@ async function applyUpdate() {
 
     updateJob = {
       phase: 'error',
-      message: '更新失败，已恢复上一版或没有改动。可以重试，或下载离线包。',
+      message: '更新失败，已恢复上一版或没有改动。可以重试，或下载自动更新器。',
       done: 0,
       total: 0,
       error: error.message || '更新失败',
@@ -1215,6 +1239,7 @@ function applyUpdateSnapshot(snapshot, { announce = true } = {}) {
     checking: Boolean(snapshot.checking),
     providers: Array.isArray(snapshot.providers) ? snapshot.providers : [],
   };
+  noteServerVersion(snapshot.currentVersion);
   renderUpdateUi();
 
   if (!announce || !snapshot.hasUpdate || !snapshot.latestVersion) return;
@@ -1427,8 +1452,8 @@ function openUpdatePage() {
           'p',
           { class: 'muted tiny' },
           update.canSelfUpdate && update.selfUpdateEnabled
-            ? '应用内更新只下载有变化的程序文件（通常几百 KB），不会重新下载 31 MB 完整包；失败了也可以下载约 1 MB 的离线包覆盖。'
-            : '这次更新没有可用的文件清单，请下载离线包覆盖。',
+            ? '应用内更新只下载有变化的程序文件（通常几百 KB），不会重新下载 31 MB 完整包；失败了也可以下载自动更新器（约 20 KB），双击运行即可。'
+            : '这次更新没有可用的文件清单，请下载自动更新器。',
         ),
       );
     } else if (update.checking) {
@@ -1489,7 +1514,7 @@ function openUpdatePage() {
     checkButton.textContent = update.checking ? '检查中…' : '立即检查';
     downloadButton.hidden = !update.hasUpdate || busy;
     downloadButton.className = update.canSelfUpdate && update.selfUpdateEnabled ? 'btn ghost' : 'btn primary';
-    downloadButton.textContent = update.canSelfUpdate && update.selfUpdateEnabled ? '下载离线包' : '去下载';
+    downloadButton.textContent = update.canSelfUpdate && update.selfUpdateEnabled ? '下载更新器' : '去下载';
     if (update.hasUpdate) downloadButton.href = update.downloadUrl || releaseUrl;
     applyButton.hidden = !(update.hasUpdate && update.canSelfUpdate && update.selfUpdateEnabled);
     applyButton.disabled = update.checking || busy;
@@ -4003,7 +4028,7 @@ async function boot() {
 
     try {
       const session = await api('/api/session', { skipAuthRedirect: true });
-      if (session.version) state.version = session.version;
+      if (session.version) noteServerVersion(session.version);
       if (session.authenticated) await enterApp();
       else showLogin();
     } catch {

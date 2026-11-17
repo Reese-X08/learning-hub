@@ -29,8 +29,10 @@ jobs:
 
           $info = Get-Content version.json -Raw -Encoding UTF8 | ConvertFrom-Json
           $info.version = $version
-          # 直链代码更新包：应用内「下载」按钮直接用这个地址（lib/updates.js 读 version.json 的 url）
-          $info.url = "${{ github.server_url }}/${{ github.repository }}/releases/latest/download/learning-hub-code.zip"
+          # 独立自动更新器：旧版本点「去下载」拿到它，双击后自动更新
+          $info.url = "${{ github.server_url }}/${{ github.repository }}/releases/latest/download/learning-hub-updater.zip"
+          # 更新器实际下载的代码包
+          $info.codeUrl = "${{ github.server_url }}/${{ github.repository }}/releases/latest/download/learning-hub-code.zip"
           ($info | ConvertTo-Json -Depth 10) | Set-Content version.json -Encoding UTF8
 
       # 应用内自更新读取的文件清单：只列运行时代码和前端资源，不包含 node/、data/
@@ -46,12 +48,17 @@ jobs:
         shell: pwsh
         run: ./tools/build-update-package.ps1
 
+      - name: 打包自动更新器
+        shell: pwsh
+        run: ./tools/build-updater-package.ps1
+
       # GitHub 会过滤掉资源名里的中文，统一改成 ASCII，方便 version.json 直接用固定 URL
       - name: 统一发布文件名
         shell: pwsh
         run: |
           Copy-Item '学习中心-便携版.zip' 'learning-hub-portable.zip' -Force
           Copy-Item '学习中心-代码更新包.zip' 'learning-hub-code.zip' -Force
+          Copy-Item '学习中心-自动更新器.zip' 'learning-hub-updater.zip' -Force
 
       - name: 发布到 Releases
         uses: softprops/action-gh-release@v2
@@ -59,6 +66,7 @@ jobs:
           files: |
             learning-hub-portable.zip
             learning-hub-code.zip
+            learning-hub-updater.zip
           generate_release_notes: true
 
       # 版本号回写到仓库，供应用内的「更新检查」使用

@@ -465,6 +465,36 @@
     true,
   );
 
+  /* 和后台协作：后台负责开标签页，后台没回应时自己开 */
+
+  const HUB_BASE = 'http://127.0.0.1:4173/';
+
+  function confirmUrl(payload) {
+    const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    return `${HUB_BASE}?collect=${encodeURIComponent(base64)}`;
+  }
+
+  // 返回 'sent' | 'no-service' | 'opened-direct' | 'failed'
+  async function sendCollect(payload) {
+    let result = null;
+    try {
+      result = await chrome.runtime.sendMessage({ type: 'hub:collect', payload });
+    } catch {
+      result = null; // 扩展刚重载 / service worker 起不来，消息通道直接断了
+    }
+
+    if (result && result.ok) {
+      return result.alive === false ? 'no-service' : 'sent';
+    }
+
+    // 后台没回应，或它开标签页失败：在点击手势里自己开一个，别让用户卡住
+    try {
+      return window.open(confirmUrl(payload), '_blank') ? 'opened-direct' : 'failed';
+    } catch {
+      return 'failed';
+    }
+  }
+
   /* 收进学习中心 */
 
   collectButton.addEventListener('click', async () => {
@@ -498,14 +528,16 @@
         progress,
       };
 
-      const result = await chrome.runtime.sendMessage({ type: 'hub:collect', payload });
+      const outcome = await sendCollect(payload);
 
-      if (result && result.ok) {
+      if (outcome === 'sent') {
         say(`已发送 ${tasks.length} 条任务${progress ? ' + 进度' : ''}`);
-      } else if (result && result.error === 'offline') {
-        say('学习中心没开着。先双击「启动.bat」，再点一次。');
+      } else if (outcome === 'opened-direct') {
+        say('扩展后台没响应，已直接打开确认页。');
+      } else if (outcome === 'no-service') {
+        say('已打开确认页。页面能打开就直接保存；打不开再双击「启动.bat」。');
       } else {
-        say('发送失败，看看学习中心是否在运行。');
+        say('打不开确认页：先启动学习中心（双击「启动.bat」）再点一次。');
       }
     } catch (error) {
       say('出错了：' + String(error && error.message ? error.message : error));
@@ -532,14 +564,16 @@
         looksLikeTask,
       };
 
-      const result = await chrome.runtime.sendMessage({ type: 'hub:collect', payload });
+      const outcome = await sendCollect(payload);
 
-      if (result && result.ok) {
+      if (outcome === 'sent') {
         say('已发送，在学习中心里确认保存');
-      } else if (result && result.error === 'offline') {
-        say('学习中心没开着。先双击「启动.bat」，再点一次。');
+      } else if (outcome === 'opened-direct') {
+        say('扩展后台没响应，已直接打开确认页。');
+      } else if (outcome === 'no-service') {
+        say('已打开确认页。页面能打开就直接保存；打不开再双击「启动.bat」。');
       } else {
-        say('发送失败，看看学习中心是否在运行。');
+        say('打不开确认页：先启动学习中心（双击「启动.bat」）再点一次。');
       }
     } catch (error) {
       say('出错了：' + String(error && error.message ? error.message : error));
